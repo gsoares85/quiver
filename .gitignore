@@ -1,0 +1,21 @@
+# Build artifacts
+/dist/
+*.exe
+*.out
+
+# Go test coverage
+/cover.out
+/coverage.txt
+
+# Node / frontend
+node_modules/
+/apps/desktop/frontend/dist/
+
+# Wails build output
+/apps/desktop/build/bin/
+
+# Local, machine-specific runtime state — never versioned
+.quiver/
+
+# OS / editor cruft
+.DS_Store

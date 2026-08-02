@@ -1,0 +1,13 @@
+# golangci-lint configuration for Quiver (schema v2).
+# Docs: https://golangci-lint.run/
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+
+formatters:
+  enable:
+    - gofumpt
