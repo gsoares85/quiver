@@ -2,5 +2,9 @@ dist
 node_modules
 pnpm-lock.yaml
 
+# Wails-generated bindings and build output
+wailsjs
+build
+
 # Hand-authored, presentation-heavy Markdown (centered HTML, badges).
 README.md

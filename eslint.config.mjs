@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint';
 // Flat ESLint config shared across the workspace (root `eslint .`). Formatting is
 // handled by Prettier, so only correctness rules live here.
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/node_modules/**'] },
+  { ignores: ['**/dist/**', '**/node_modules/**', '**/wailsjs/**', '**/build/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
