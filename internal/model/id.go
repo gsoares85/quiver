@@ -29,11 +29,27 @@ func newGeneratorWith(now func() time.Time, entropy io.Reader) *Generator {
 	return &Generator{now: now, entropy: entropy}
 }
 
-// New returns a new ULID as a string. It is safe to call concurrently.
-func (g *Generator) New() string {
+// TryNew returns a new ULID as a string, or an error if the entropy source fails. It
+// is safe to call concurrently.
+func (g *Generator) TryNew() (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return ulid.MustNew(ulid.Timestamp(g.now()), g.entropy).String()
+	id, err := ulid.New(ulid.Timestamp(g.now()), g.entropy)
+	if err != nil {
+		return "", err
+	}
+	return id.String(), nil
+}
+
+// New returns a new ULID as a string. It is safe to call concurrently and panics only
+// if the entropy source fails — which the default crypto/rand source never does. Use
+// TryNew to handle entropy errors from a custom source.
+func (g *Generator) New() string {
+	id, err := g.TryNew()
+	if err != nil {
+		panic(err)
+	}
+	return id
 }
 
 // defaultGenerator backs the package-level NewID helper.

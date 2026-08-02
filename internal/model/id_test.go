@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -19,6 +20,11 @@ func (r *fixedReader) Read(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+// errReader always fails, simulating a broken entropy source.
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("entropy failure") }
 
 func TestNewIDIsValidULID(t *testing.T) {
 	id := NewID()
@@ -43,4 +49,23 @@ func TestGeneratorSortsByTime(t *testing.T) {
 
 	// ULIDs encode the timestamp in their high bits, so an earlier time sorts first.
 	require.Less(t, early.New(), late.New())
+}
+
+func TestGeneratorTryNew(t *testing.T) {
+	id, err := newGeneratorWith(time.Now, &fixedReader{}).TryNew()
+
+	require.NoError(t, err)
+	require.Len(t, id, 26)
+}
+
+func TestGeneratorTryNewReturnsEntropyError(t *testing.T) {
+	_, err := newGeneratorWith(time.Now, errReader{}).TryNew()
+
+	require.Error(t, err)
+}
+
+func TestGeneratorNewPanicsOnEntropyError(t *testing.T) {
+	g := newGeneratorWith(time.Now, errReader{})
+
+	require.Panics(t, func() { _ = g.New() })
 }
