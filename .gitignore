@@ -1,7 +1,8 @@
 # Build artifacts
-/dist/
+dist/
 *.exe
 *.out
+*.tsbuildinfo
 
 # Go test coverage
 /cover.out
@@ -9,7 +10,6 @@
 
 # Node / frontend
 node_modules/
-/apps/desktop/frontend/dist/
 
 # Wails build output
 /apps/desktop/build/bin/

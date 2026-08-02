@@ -1,0 +1,6 @@
+dist
+node_modules
+pnpm-lock.yaml
+
+# Hand-authored, presentation-heavy Markdown (centered HTML, badges).
+README.md

@@ -1,0 +1,7 @@
+packages:
+  - apps/desktop/frontend
+  - packages/ui
+
+# esbuild (used by Vite) runs an install script to provide its native binary.
+allowBuilds:
+  esbuild: true
