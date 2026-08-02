@@ -60,7 +60,7 @@ editor) comes next.
 
 ## Repository layout
 
-```
+```text
 .
 ├─ apps/desktop/        # Wails v2 desktop app
 │  ├─ main.go, app.go   # bound structs (thin — delegate to internal/*)
