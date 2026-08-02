@@ -5,7 +5,3 @@ packages:
 # esbuild (used by Vite) runs an install script to provide its native binary.
 onlyBuiltDependencies:
   - esbuild
-
-# Local sandbox build approval (ignored by upstream pnpm).
-allowBuilds:
-  esbuild: true
