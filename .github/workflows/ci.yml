@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go — lint & test (coverage gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.8.0
+      - name: Lint
+        run: golangci-lint run ./internal/... ./cmd/...
+      - name: Test with coverage
+        run: go test -covermode=atomic -coverprofile=cover.out ./internal/... ./cmd/...
+      - name: Enforce coverage gate (>= 80%)
+        run: |
+          total=$(go tool cover -func=cover.out | awk '/^total:/ {gsub(/%/,"",$NF); print $NF}')
+          echo "Total coverage: ${total}%"
+          awk -v t="$total" 'BEGIN {
+            if (t + 0 < 80) { printf "::error::coverage %.1f%% is below the 80%% gate\n", t; exit 1 }
+            printf "coverage %.1f%% meets the 80%% gate\n", t
+          }'
+
+  frontend:
+    name: Frontend — lint, typecheck & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Format check
+        run: pnpm format:check
+      - name: Type-check
+        run: pnpm -r typecheck
+      - name: Build
+        run: pnpm -r build
+
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+      - name: Build Go (engine + CLI)
+        run: go build ./internal/... ./cmd/...
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build frontend
+        run: pnpm -r build
+
+# The packaged desktop app (`wails build`) is intentionally NOT part of the required
+# gate: it needs platform webview toolchains (e.g. webkit2gtk on Linux) and is
+# verified locally. A non-blocking desktop-build job can be added later if wanted.
