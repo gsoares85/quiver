@@ -1,0 +1,12 @@
+packages:
+  - apps/desktop/frontend
+  - packages/ui
+
+# pnpm blocks dependency install scripts by default. esbuild (used by Vite) needs its
+# script to provide the native binary, so approve it. `allowBuilds` is the approval map
+# pnpm 11 writes via `pnpm approve-builds` and is what actually enables the build;
+# `onlyBuiltDependencies` is the equivalent allowlist for other pnpm versions.
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  esbuild: true

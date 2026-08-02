@@ -7,6 +7,9 @@ and never holds your work hostage.**
 
 *A local-first, git-native alternative to Postman.*
 
+[![CI](https://github.com/gsoares85/quiver/actions/workflows/ci.yml/badge.svg)](https://github.com/gsoares85/quiver/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/gsoares85/quiver?sort=semver&display_name=tag)](https://github.com/gsoares85/quiver/releases)
+
 > ⚠️ **Working codename.** "Quiver" is a placeholder name pending finalization.
 
 </div>
@@ -36,8 +39,11 @@ stance:
 
 ## Status
 
-Early development. The local-first single-user core comes first; collaboration
-and extensibility land in later phases.
+Early development. **Phase 0 (foundations) is in place:** the Go module and package
+skeleton, the `quiver` CLI, the Wails desktop shell, the shared UI package, and a CI
+pipeline that enforces linting, tests, a coverage gate, and cross-platform builds.
+The local-first single-user core (request engine, storage, and the request/response
+editor) comes next.
 
 ## Architecture at a glance
 
@@ -52,22 +58,84 @@ and extensibility land in later phases.
 | Collaboration | **Yjs** (CRDT) + self-hostable Go relay |
 | Plugins | **wazero** (sandboxed WASM) |
 
-## Quick start (development)
+## Repository layout
 
-> Scaffolding is in progress; these are the intended commands.
+```text
+.
+├─ apps/desktop/        # Wails v2 desktop app
+│  ├─ main.go, app.go   # bound structs (thin — delegate to internal/*)
+│  ├─ wails.json
+│  └─ frontend/         # React 18 + TypeScript + Vite
+├─ cmd/quiver/          # `quiver` CLI (cobra)
+├─ internal/            # shared engine: model, store, httpengine, script, sync, runner
+│  └─ buildinfo/        # version & build metadata
+├─ packages/ui/         # shared React design system (@quiver/ui)
+├─ .github/workflows/   # CI
+├─ go.mod               # module github.com/gsoares85/quiver
+└─ README.md
+```
+
+The desktop app and the CLI import the same `internal/*` packages, so a request runs
+identically in the app and in CI. No execution logic lives in the UI or the shell.
+
+## Development
+
+**Prerequisites:** Go 1.25+, Node 24+, pnpm 11+, and the
+[Wails CLI](https://wails.io/) (`wails doctor` verifies your environment).
+
+### Desktop app
 
 ```bash
-# Prerequisites: Go, Node.js + pnpm, and the Wails CLI.
-
-# Run the desktop app with hot reload
-wails dev
-
-# Run the CLI against a collection
-go run ./cmd/quiver run collections/users-api --env local
-
-# Run tests
-go test ./...
+cd apps/desktop
+wails dev      # run with hot reload (Go backend + React frontend)
+wails build    # build a distributable app into build/bin/
 ```
+
+The `build/bin/` artifact is platform-specific: `quiver.app` on macOS, `quiver.exe`
+on Windows, and `quiver` on Linux.
+
+### CLI
+
+```bash
+go run ./cmd/quiver version
+```
+
+### Go — build, test, lint
+
+```bash
+go build ./internal/... ./cmd/...
+go test -cover ./internal/... ./cmd/...
+golangci-lint run ./internal/... ./cmd/...
+```
+
+> The desktop package (`apps/desktop`) embeds the built frontend and links the OS
+> webview, so build it with `wails build` rather than a bare `go build ./...`.
+
+### Frontend (from the repository root)
+
+```bash
+pnpm install
+pnpm lint            # ESLint across the workspace
+pnpm format:check    # Prettier
+pnpm -r typecheck    # tsc --noEmit
+pnpm -r build        # build @quiver/ui and the desktop frontend
+```
+
+## Quality gates & CI
+
+CI runs on every pull request and on pushes to `main`:
+
+- **Go** — `golangci-lint` (gofumpt, govet, staticcheck, errcheck) and `go test`.
+- **Frontend** — ESLint, Prettier, `tsc`, and the Vite build.
+- **Cross-platform build** — `go build` on macOS, Windows, and Linux.
+- **Coverage gate** — total Go coverage (over `./internal/...` and `./cmd/...`) must
+  stay **≥ 80%**; a change that drops below fails the build.
+
+## Versioning & releases
+
+Quiver follows **[Semantic Versioning](https://semver.org/)** and ships via
+**GitHub Releases** (tagged `vMAJOR.MINOR.PATCH`). `quiver version` reports the
+release the binary was built from.
 
 ## Contributing
 
