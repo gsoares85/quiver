@@ -105,6 +105,15 @@ func TestValidateRules(t *testing.T) {
 		{"two auth variants", func(w *Workspace) {
 			theRequest(w).Auth = &Auth{Type: AuthBearer, Basic: &BasicAuth{}, Bearer: &BearerAuth{}}
 		}, reqPath + ".auth", "at most one credential variant"},
+		{"auth requires its named variant", func(w *Workspace) {
+			theRequest(w).Auth = &Auth{Type: AuthBasic}
+		}, reqPath + ".auth", "requires basic credentials"},
+		{"auth wrong variant for type", func(w *Workspace) {
+			theRequest(w).Auth = &Auth{Type: AuthBasic, Bearer: &BearerAuth{}}
+		}, reqPath + ".auth", "must set basic credentials, not bearer"},
+		{"auth none must not carry a payload", func(w *Workspace) {
+			theRequest(w).Auth = &Auth{Type: AuthNone, Basic: &BasicAuth{}}
+		}, reqPath + ".auth", "must not set basic credentials"},
 		{"unknown body type", func(w *Workspace) { theRequest(w).Body = &Body{Type: "protobuf"} }, reqPath + ".body.type", "unknown body type"},
 		{"none body with content", func(w *Workspace) { theRequest(w).Body = &Body{Type: BodyNone, Text: "x"} }, reqPath + ".body", "must not set any content"},
 		{"json body with form", func(w *Workspace) {

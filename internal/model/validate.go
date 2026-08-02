@@ -145,21 +145,56 @@ func (v *validator) requestShape(r *Request, path string) {
 	v.body(r.Body, path+".body")
 }
 
+// authVariant maps each auth type to the credential variant it must carry. The
+// none/inherit types carry no credentials and map to the empty string. Keeping the
+// table beside the validator makes the type↔variant binding explicit and easy to
+// extend when a new auth type is added.
+var authVariant = map[AuthType]string{
+	AuthNone:    "",
+	AuthInherit: "",
+	AuthBasic:   "basic",
+	AuthBearer:  "bearer",
+	AuthAPIKey:  "apiKey",
+	AuthOAuth2:  "oauth2",
+}
+
 func (v *validator) auth(a *Auth, path string) {
 	if a == nil {
 		return
 	}
 	if !a.Type.Valid() {
 		v.fail(path+".type", fmt.Sprintf("unknown auth type %q", a.Type))
+		return
 	}
-	set := 0
-	for _, present := range []bool{a.Basic != nil, a.Bearer != nil, a.APIKey != nil, a.OAuth2 != nil} {
-		if present {
-			set++
-		}
+
+	set := make([]string, 0, 4)
+	if a.Basic != nil {
+		set = append(set, "basic")
 	}
-	if set > 1 {
+	if a.Bearer != nil {
+		set = append(set, "bearer")
+	}
+	if a.APIKey != nil {
+		set = append(set, "apiKey")
+	}
+	if a.OAuth2 != nil {
+		set = append(set, "oauth2")
+	}
+	if len(set) > 1 {
 		v.fail(path, "auth must set at most one credential variant")
+		return
+	}
+
+	// The type must carry exactly the credential variant it names (none for the
+	// none/inherit types).
+	want := authVariant[a.Type]
+	switch {
+	case want == "" && len(set) == 1:
+		v.fail(path, fmt.Sprintf("auth type %q must not set %s credentials", a.Type, set[0]))
+	case want != "" && len(set) == 0:
+		v.fail(path, fmt.Sprintf("auth type %q requires %s credentials", a.Type, want))
+	case want != "" && len(set) == 1 && set[0] != want:
+		v.fail(path, fmt.Sprintf("auth type %q must set %s credentials, not %s", a.Type, want, set[0]))
 	}
 }
 
