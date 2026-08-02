@@ -11,8 +11,14 @@ dist/
 # Node / frontend
 node_modules/
 
-# Wails build output
-/apps/desktop/build/bin/
+# Wails generated output and JS bindings (regenerated on build)
+/apps/desktop/build/
+/apps/desktop/frontend/wailsjs/
+package.json.md5
+
+# Stray Go build binaries (prefer `go build -o` / `wails build`)
+/desktop
+/quiver
 
 # Local, machine-specific runtime state — never versioned
 .quiver/
