@@ -123,7 +123,7 @@ pnpm -r build        # build @quiver/ui and the desktop frontend
 
 ## Quality gates & CI
 
-Every push and pull request runs CI:
+CI runs on every pull request and on pushes to `main`:
 
 - **Go** — `golangci-lint` (gofumpt, govet, staticcheck, errcheck) and `go test`.
 - **Frontend** — ESLint, Prettier, `tsc`, and the Vite build.
