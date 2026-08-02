@@ -88,8 +88,11 @@ identically in the app and in CI. No execution logic lives in the UI or the shel
 ```bash
 cd apps/desktop
 wails dev      # run with hot reload (Go backend + React frontend)
-wails build    # build a distributable app → build/bin/quiver.app
+wails build    # build a distributable app into build/bin/
 ```
+
+The `build/bin/` artifact is platform-specific: `quiver.app` on macOS, `quiver.exe`
+on Windows, and `quiver` on Linux.
 
 ### CLI
 
