@@ -42,8 +42,10 @@ stance:
 Early development. **Phase 0 (foundations) is in place:** the Go module and package
 skeleton, the `quiver` CLI, the Wails desktop shell, the shared UI package, and a CI
 pipeline that enforces linting, tests, a coverage gate, and cross-platform builds.
-The local-first single-user core (request engine, storage, and the request/response
-editor) comes next.
+The shared **domain model** (`internal/model`) now defines the core entities —
+workspaces, collections, folders, requests, environments, auth, and bodies — with
+ULID identities and validation. Storage (the git-native `.qv.yaml` format) and the
+request engine come next.
 
 ## Architecture at a glance
 
