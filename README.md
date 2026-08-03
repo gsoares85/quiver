@@ -8,7 +8,7 @@ and never holds your work hostage.**
 *A local-first, git-native alternative to Postman.*
 
 [![CI](https://github.com/gsoares85/quiver/actions/workflows/ci.yml/badge.svg)](https://github.com/gsoares85/quiver/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/gsoares85/quiver?sort=semver&display_name=tag)](https://github.com/gsoares85/quiver/releases)
+[![Latest release](https://img.shields.io/github/v/release/gsoares85/quiver?include_prereleases&sort=semver&display_name=tag)](https://github.com/gsoares85/quiver/releases)
 
 > ⚠️ **Working codename.** "Quiver" is a placeholder name pending finalization.
 
