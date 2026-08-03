@@ -139,7 +139,13 @@ func saveFolder(ctx context.Context, dir string, f *model.Folder) error {
 func saveItems(ctx context.Context, dir string, items []model.Item) (order []string, kept map[string]bool, err error) {
 	kept = map[string]bool{}
 	usedFolders := map[string]bool{}
-	usedRequests := map[string]bool{}
+	// Reserve the metadata base names so a request named e.g. "Collection" cannot be
+	// written as collection.qv.yaml (which would collide with the container's metadata
+	// and be dropped on load); such a request becomes collection-2.qv.yaml instead.
+	usedRequests := map[string]bool{
+		strings.TrimSuffix(collectionMeta, qvExt): true,
+		strings.TrimSuffix(folderMeta, qvExt):     true,
+	}
 	for i := range items {
 		switch {
 		case items[i].Folder != nil:

@@ -128,6 +128,30 @@ func TestSaveDedupesFilenames(t *testing.T) {
 	require.FileExists(t, filepath.Join(cdir, "dup-2.qv.yaml"))
 }
 
+func TestSaveReservedRequestNames(t *testing.T) {
+	// Requests whose names slug to the reserved metadata bases must not clobber the
+	// container's own collection.qv.yaml / folder.qv.yaml, and must survive a round-trip.
+	ws := &model.Workspace{
+		SchemaVersion: currentSchemaVersion, ID: "ws", Name: "n",
+		Collections: []model.Collection{{ID: "c", Name: "C", Items: []model.Item{
+			{Request: &model.Request{ID: "r1", Name: "Collection", Method: "GET"}},
+			{Request: &model.Request{ID: "r2", Name: "Folder", Method: "GET"}},
+			{Request: &model.Request{ID: "r3", Name: "Ping", Method: "GET"}},
+		}}},
+	}
+	ctx := context.Background()
+	dir := t.TempDir()
+	require.NoError(t, Save(ctx, ws, dir))
+
+	cdir := filepath.Join(dir, collectionsDir, "c")
+	require.FileExists(t, filepath.Join(cdir, "collection-2.qv.yaml"))
+	require.FileExists(t, filepath.Join(cdir, "folder-2.qv.yaml"))
+
+	got, err := Load(ctx, dir)
+	require.NoError(t, err)
+	require.Len(t, got.Collections[0].Items, 3, "all requests survive the round-trip")
+}
+
 func TestInit(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
