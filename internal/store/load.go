@@ -53,18 +53,50 @@ func Load(ctx context.Context, path string) (*model.Workspace, error) {
 	return ws, nil
 }
 
-// loadFile reads and decodes a single .qv.yaml file into out. It is the seam where
-// schema migrations run before decoding (added in a later phase).
+// loadFile reads a single .qv.yaml file, migrates it to the current schema version if
+// needed, and decodes it into out.
 func loadFile(ctx context.Context, path string, out any) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	base := filepath.Base(path)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("read %s: %w", filepath.Base(path), err)
+		return fmt.Errorf("read %s: %w", base, err)
 	}
-	if err := unmarshalYAML(data, out); err != nil {
-		return fmt.Errorf("parse %s: %w", filepath.Base(path), err)
+
+	// Peek the schema version cheaply before deciding how to decode.
+	var head struct {
+		SchemaVersion int `yaml:"schemaVersion"`
+	}
+	if err := unmarshalYAML(data, &head); err != nil {
+		return fmt.Errorf("parse %s: %w", base, err)
+	}
+	switch {
+	case head.SchemaVersion > currentSchemaVersion:
+		return fmt.Errorf("%s: schema version %d is newer than supported version %d", base, head.SchemaVersion, currentSchemaVersion)
+	case head.SchemaVersion == currentSchemaVersion:
+		if err := unmarshalYAML(data, out); err != nil {
+			return fmt.Errorf("decode %s: %w", base, err)
+		}
+		return nil
+	}
+
+	// Older format: migrate through the generic representation, then decode.
+	var doc map[string]any
+	if err := unmarshalYAML(data, &doc); err != nil {
+		return fmt.Errorf("parse %s: %w", base, err)
+	}
+	migrated, err := applyMigrations(doc, migrations)
+	if err != nil {
+		return fmt.Errorf("migrate %s: %w", base, err)
+	}
+	remarshaled, err := marshalYAML(migrated)
+	if err != nil {
+		return fmt.Errorf("re-encode %s: %w", base, err)
+	}
+	if err := unmarshalYAML(remarshaled, out); err != nil {
+		return fmt.Errorf("decode %s: %w", base, err)
 	}
 	return nil
 }
