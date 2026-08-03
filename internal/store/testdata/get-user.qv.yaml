@@ -1,0 +1,30 @@
+schemaVersion: 1
+id: 01J9Z3P4REQGETUSER0000000
+name: Get user
+method: GET
+url: '{{baseUrl}}/users/{{userId}}'
+headers:
+  - key: Accept
+    value: application/json
+    enabled: true
+query:
+  - key: include
+    value: profile
+    enabled: false
+body:
+  type: json
+  text: |
+    {
+      "a": 1
+    }
+auth:
+  type: inherit
+preRequest: |
+  qv.variables.set("userId", "42");
+test: |
+  test("status is 200", () => {
+    qv.expect(qv.response.status).toBe(200);
+  });
+settings:
+  followRedirects: true
+  maxRedirects: 10

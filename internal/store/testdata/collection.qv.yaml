@@ -1,0 +1,10 @@
+schemaVersion: 1
+id: 01J9Z3R8COLUSERSAPI000000
+name: Users API
+auth:
+  type: bearer
+  bearer:
+    token: '{{apiToken}}'
+order:
+  - auth
+  - users
