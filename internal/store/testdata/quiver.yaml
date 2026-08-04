@@ -1,0 +1,12 @@
+schemaVersion: 1
+id: 01J9Z3K7QV0000000000000000
+name: My API
+settings:
+  followRedirects: true
+  timeoutMs: 30000
+variables:
+  - key: apiVersion
+    value: v1
+    enabled: true
+order:
+  - users-api

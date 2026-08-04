@@ -44,8 +44,9 @@ skeleton, the `quiver` CLI, the Wails desktop shell, the shared UI package, and 
 pipeline that enforces linting, tests, a coverage gate, and cross-platform builds.
 The shared **domain model** (`internal/model`) now defines the core entities —
 workspaces, collections, folders, requests, environments, auth, and bodies — with
-ULID identities and validation. Storage (the git-native `.qv.yaml` format) and the
-request engine come next.
+ULID identities and validation, and the **git-native storage engine**
+(`internal/store`) round-trips those entities to and from byte-stable `.qv.yaml` files
+on disk. Request execution (the HTTP engine) comes next.
 
 ## Architecture at a glance
 
@@ -79,6 +80,46 @@ request engine come next.
 
 The desktop app and the CLI import the same `internal/*` packages, so a request runs
 identically in the app and in CI. No execution logic lives in the UI or the shell.
+
+## Storage format
+
+A workspace is plain text on disk, so it version-controls, diffs, reviews, and merges
+like source. The collection tree maps directly onto the filesystem — directories are
+collections and folders, files are requests:
+
+```text
+my-api/                       # workspace root (usually a git repo)
+├─ quiver.yaml                # workspace manifest (id, name, settings)
+├─ environments/
+│  └─ staging.qv.yaml         # a named set of variables
+└─ collections/
+   └─ users-api/              # a collection (directory)
+      ├─ collection.qv.yaml   # collection metadata + child order
+      └─ users/               # a folder (directory)
+         ├─ folder.qv.yaml    # folder metadata + child order
+         └─ get-user.qv.yaml  # a request
+```
+
+- **Byte-stable & diff-friendly.** Files use a fixed field order, 2-space indent, and
+  `\n` endings, so a one-line change is a one-line `git diff`. A canonical workspace —
+  one Quiver wrote itself, already at the current `schemaVersion` — loads and saves back
+  byte-for-byte identically. Hand-written files and older workspaces are normalized into
+  that canonical form on the first save: migrations upgrade them on load, and every file
+  is written back at the current `schemaVersion`.
+- **Human-readable & tool-agnostic.** Plain YAML (`*.qv.yaml`) — you, or any tool, can
+  create and edit requests by hand.
+- **Stable identity & order.** Every entity has a ULID `id`, so renames and merges
+  stay clean; a folder records the authored order of its children in an `order:` list
+  (absent order sorts alphabetically).
+- **Secrets stay out of the files.** A secret variable is stored as a reference
+  (`secret: true`, no value); resolving it from the OS keychain is an upcoming feature.
+- **Versioned & migratable.** Every file carries a `schemaVersion`; registered
+  migrations run on load as the format evolves, so older workspaces keep working.
+- **Safe writes.** Each file is written to a temporary file, fsynced, and renamed over
+  its target, so no reader ever sees a half-written file. Replacement is per file, not
+  per workspace: a save is not a single transaction, so an interrupted one can leave
+  some files updated and others not. Machine-local state lives in a git-ignored
+  `.quiver/` directory.
 
 ## Development
 

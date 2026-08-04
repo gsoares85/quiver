@@ -7,6 +7,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	github.com/wailsapp/wails/v2 v2.13.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -42,5 +43,4 @@ require (
 	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

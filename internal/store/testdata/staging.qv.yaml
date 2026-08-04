@@ -1,0 +1,10 @@
+schemaVersion: 1
+id: 01J9Z3M2ENVSTAGING00000000
+name: staging
+variables:
+  - key: baseUrl
+    value: https://staging.example.com
+    enabled: true
+  - key: apiToken
+    secret: true
+    enabled: true
