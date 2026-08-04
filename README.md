@@ -101,8 +101,11 @@ my-api/                       # workspace root (usually a git repo)
 ```
 
 - **Byte-stable & diff-friendly.** Files use a fixed field order, 2-space indent, and
-  `\n` endings, so a one-line change is a one-line `git diff`; a workspace loads and
-  saves back byte-for-byte identically.
+  `\n` endings, so a one-line change is a one-line `git diff`. A canonical workspace —
+  one Quiver wrote itself, already at the current `schemaVersion` — loads and saves back
+  byte-for-byte identically. Hand-written files and older workspaces are normalized into
+  that canonical form on the first save: migrations upgrade them on load, and every file
+  is written back at the current `schemaVersion`.
 - **Human-readable & tool-agnostic.** Plain YAML (`*.qv.yaml`) — you, or any tool, can
   create and edit requests by hand.
 - **Stable identity & order.** Every entity has a ULID `id`, so renames and merges
@@ -112,8 +115,10 @@ my-api/                       # workspace root (usually a git repo)
   (`secret: true`, no value); resolving it from the OS keychain is an upcoming feature.
 - **Versioned & migratable.** Every file carries a `schemaVersion`; registered
   migrations run on load as the format evolves, so older workspaces keep working.
-- **Safe writes.** Files are written to a temporary file and renamed, so a crash never
-  leaves a half-written workspace. Machine-local state lives in a git-ignored
+- **Safe writes.** Each file is written to a temporary file, fsynced, and renamed over
+  its target, so no reader ever sees a half-written file. Replacement is per file, not
+  per workspace: a save is not a single transaction, so an interrupted one can leave
+  some files updated and others not. Machine-local state lives in a git-ignored
   `.quiver/` directory.
 
 ## Development

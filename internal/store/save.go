@@ -23,8 +23,21 @@ func Init(ctx context.Context, path, name string) (*model.Workspace, error) {
 
 // Save writes ws to the git-native tree rooted at path. Filenames are canonical slugs
 // of entity names (de-duplicated within a parent); each parent records its children's
-// authored order. Writes are atomic, and files/dirs no longer present in the model are
-// pruned. Saving a workspace loaded from a canonical tree reproduces it byte-for-byte.
+// authored order. Writes are atomic per file — not per workspace, so an interrupted
+// Save can leave some files updated and others not — and saving a workspace loaded from
+// a canonical tree reproduces it byte-for-byte.
+//
+// Save owns the managed directories exclusively: collections/, environments/, and every
+// collection and folder directory below them. In those, it removes every entry it did
+// not just write — not only entities dropped from the model, but any unrecognized file
+// or directory a user or another tool left there (a README, a .gitkeep, a scratch YAML,
+// a nested directory). Removal is recursive and permanent; nothing is moved to a trash
+// directory first.
+//
+// The workspace root is never pruned. Beside quiver.yaml and the two managed
+// directories, whatever a user keeps there — .gitignore, .git/, .quiver/, README.md, CI
+// config — survives untouched, which makes the root the only safe place for files that
+// are not part of the model.
 func Save(ctx context.Context, ws *model.Workspace, path string) error {
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return fmt.Errorf("create workspace dir: %w", err)
