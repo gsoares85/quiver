@@ -111,6 +111,9 @@ func newRequest(ctx context.Context, req model.Request, opener FileOpener) (*htt
 		hr.GetBody = body.open // lets the client replay the payload across a redirect
 	}
 	applyHeaders(hr, req.Headers, body.contentType)
+	if err := applyAuth(hr, req.Auth); err != nil {
+		return nil, err // credentials are attached last so they win over a typed header
+	}
 	return hr, nil
 }
 
