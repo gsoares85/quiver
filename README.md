@@ -42,17 +42,21 @@ stance:
 Early development. **Phase 0 (foundations) is in place:** the Go module and package
 skeleton, the `quiver` CLI, the Wails desktop shell, the shared UI package, and a CI
 pipeline that enforces linting, tests, a coverage gate, and cross-platform builds.
-The shared **domain model** (`internal/model`) now defines the core entities —
-workspaces, collections, folders, requests, environments, auth, and bodies — with
-ULID identities and validation, and the **git-native storage engine**
-(`internal/store`) round-trips those entities to and from byte-stable `.qv.yaml` files
-on disk. Request execution (the HTTP engine) comes next.
+The shared **domain model** (`internal/model`) defines the core entities — workspaces,
+collections, folders, requests, environments, auth, and bodies — with ULID identities
+and validation; the **git-native storage engine** (`internal/store`) round-trips those
+entities to and from byte-stable `.qv.yaml` files on disk; and the **request engine**
+(`internal/httpengine`) sends them, streaming responses back with a per-phase timing
+waterfall, authentication, redirect control, and full cancellation. Next up:
+`{{variable}}` resolution across environments, and the app and CLI surfaces that put the
+engine in front of you.
 
 ## Architecture at a glance
 
 | Layer | Technology |
 |-------|-----------|
 | Core engine | **Go** (`internal/*`) — shared by the app and the CLI |
+| Request execution | Go **`net/http`** — HTTP/1.1 + HTTP/2, streaming, `httptrace` timing |
 | Desktop shell | **Wails v2** (native webview + Go) |
 | Frontend | **React 18 + TypeScript + Vite** |
 | CLI | **cobra** (`cmd/quiver`) |
@@ -120,6 +124,42 @@ my-api/                       # workspace root (usually a git repo)
   per workspace: a save is not a single transaction, so an interrupted one can leave
   some files updated and others not. Machine-local state lives in a git-ignored
   `.quiver/` directory.
+
+## Request engine
+
+Sending a request is implemented exactly once, in `internal/httpengine` — the package the
+desktop app and the CLI both run on, so a request behaves identically in the app, in your
+terminal, and in CI. Execution logic lives there and nowhere else: not in the UI, not in
+the desktop shell.
+
+- **Streaming responses.** A response arrives as a stream: headers first, then body
+  chunks as they land, then the assembled result with its timing. Large payloads render
+  progressively instead of blocking on one big reply, and the same shape will carry
+  long-lived streams (SSE, WebSocket) when they land.
+- **HTTP/1.1 and HTTP/2**, negotiated automatically over pooled keep-alive connections.
+- **A real timing waterfall.** DNS, connect, TLS handshake, time to first byte, and
+  download are measured separately. A zero phase means it genuinely did not happen — a
+  reused connection performs no handshake, an IP literal needs no lookup — rather than a
+  measurement that went missing.
+- **Cancellation and timeouts that reach the body.** Both are enforced through the
+  request's context, so they cover a response while it streams rather than only the
+  initial reply. A cancelled request stops promptly and still tells you why it ended.
+- **Redirects under your control.** They are off by default, so a 3xx *is* the response,
+  `Location` header intact and inspectable. Turn them on and every hop is recorded with
+  its status and both URLs, while `maxRedirects` acts as a real budget. Credentials are
+  never forwarded to a different host.
+- **Authentication** applied at send time: Basic, Bearer, and API key (in a header or the
+  query string), plus OAuth 2.0 requests that carry an already-acquired token — the grant
+  flows themselves come later. Secret values are resolved at run time and never written
+  to a file, a log, or an error message.
+- **Every body type:** JSON, text, XML, GraphQL, url-encoded forms, multipart uploads,
+  and raw binary. Uploads stream from disk instead of being buffered in memory, and a
+  followed redirect replays the payload intact.
+- **Actionable failures.** Transport errors are classified into a stable set — `dns`,
+  `connection_refused`, `tls`, `timeout`, `canceled`, `too_many_redirects` — so the app
+  can say something useful and the CLI can turn them into meaningful exit codes.
+- **Proxies and TLS.** `HTTP(S)_PROXY` and `NO_PROXY` are honored by default, and
+  certificate verification is always on.
 
 ## Development
 
