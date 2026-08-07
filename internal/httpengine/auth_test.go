@@ -183,6 +183,13 @@ func TestApplyAuthErrors(t *testing.T) {
 			wantMsg: "api key value contains a line break",
 		},
 		{
+			name: "api key under a malformed name",
+			auth: &model.Auth{Type: model.AuthAPIKey, APIKey: &model.APIKeyAuth{
+				Key: "X Api Key", Value: "k-1",
+			}},
+			wantMsg: `api key header name "X Api Key" is not a valid token`,
+		},
+		{
 			name: "api key in an unknown place",
 			auth: &model.Auth{Type: model.AuthAPIKey, APIKey: &model.APIKeyAuth{
 				Key: "X-Api-Key", Value: "k-1", In: "cookie",

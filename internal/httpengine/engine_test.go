@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gsoares85/quiver/internal/model"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,6 +47,7 @@ func collect(t *testing.T, ch <-chan Chunk) stream {
 			got.trace = chunk.Trace
 		case chunk.Err != nil:
 			got.err = chunk.Err
+			got.trace = chunk.Trace
 		}
 	}
 	return got
@@ -111,8 +113,11 @@ func TestExecuteSendsTheRequestFaithfully(t *testing.T) {
 	}
 	var got received
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// assert, not require: FailNow off the test goroutine is unsupported, and aborting
+		// a handler mid-response would surface as a confusing client-side error instead of
+		// the assertion that actually failed.
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		got = received{
 			method: r.Method,
 			path:   r.URL.Path,
@@ -375,7 +380,7 @@ func TestExecuteUsesTheInjectedFileOpener(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		got = string(body)
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -409,11 +414,13 @@ func TestExecuteIsSafeForConcurrentUse(t *testing.T) {
 				Method: http.MethodGet,
 				URL:    srv.URL + path,
 			})
-			require.NoError(t, err)
+			if !assert.NoError(t, err) { // assert: this is not the test goroutine
+				return
+			}
 
 			got := collect(t, ch)
-			require.NoError(t, got.err)
-			require.Equal(t, path, string(got.done.Body), "responses must not cross wires")
+			assert.NoError(t, got.err)
+			assert.Equal(t, path, string(got.done.Body), "responses must not cross wires")
 		}()
 	}
 	wg.Wait()
@@ -450,6 +457,66 @@ func TestExecuteSizesTheBodyFromContentLength(t *testing.T) {
 	require.NoError(t, got.err)
 	require.Equal(t, payload, string(got.done.Body))
 	require.Equal(t, len(payload), cap(got.done.Body))
+}
+
+func TestExecuteGivesTheDoneChunkItsOwnHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Rate-Limit", "100")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	ch, err := New().Execute(context.Background(), model.Request{Method: http.MethodGet, URL: srv.URL})
+	require.NoError(t, err)
+
+	var meta, done *model.Response
+	for chunk := range ch {
+		switch {
+		case chunk.Meta != nil:
+			meta = chunk.Meta
+			// A consumer is free to do what it likes with a chunk it has been handed.
+			meta.Headers[0].Value = "rewritten by the consumer"
+		case chunk.Done != nil:
+			done = chunk.Done
+		}
+	}
+
+	require.NotNil(t, meta)
+	require.NotNil(t, done)
+	require.NotEqual(t, "rewritten by the consumer", done.Headers[0].Value,
+		"the two chunks must not share a backing array")
+}
+
+func TestExecuteDescribesFailuresInTheTrace(t *testing.T) {
+	srv := chainServer(t)
+
+	got := execute(t, context.Background(), model.Request{
+		Method:   http.MethodGet,
+		URL:      srv.URL + "/hop/5",
+		Settings: model.RequestSettings{FollowRedirects: true, MaxRedirects: 2},
+	})
+
+	require.Equal(t, KindTooManyRedirects, KindOf(got.err))
+	require.NotNil(t, got.trace, "a failure is still worth describing")
+	require.Positive(t, got.trace.Duration, "how long it took before giving up")
+	require.Len(t, got.trace.Redirects, 2, "and how far it got")
+	require.Empty(t, got.trace.Proto, "no response arrived, so nothing was negotiated")
+}
+
+func TestExecuteReportsTrailers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Trailer", "X-Checksum")
+		_, _ = w.Write([]byte("payload"))
+		w.Header().Set("X-Checksum", "abc123") // written after the body
+	}))
+	defer srv.Close()
+
+	got := execute(t, context.Background(), model.Request{Method: http.MethodGet, URL: srv.URL})
+
+	require.NoError(t, got.err)
+	require.Equal(t, "payload", string(got.done.Body))
+	require.Equal(t, []model.Header{{Key: "X-Checksum", Value: "abc123", Enabled: true}}, got.trace.Trailers)
+	require.Equal(t, got.done.Duration, got.trace.Duration, "one clock reading, reported once")
 }
 
 func TestExecuteReportsAServerErrorAsAResponse(t *testing.T) {

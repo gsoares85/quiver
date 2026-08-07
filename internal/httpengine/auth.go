@@ -82,6 +82,9 @@ func applyAPIKey(hr *http.Request, cred *model.APIKeyAuth) error {
 	value := strings.TrimSpace(cred.Value)
 	switch strings.ToLower(strings.TrimSpace(cred.In)) {
 	case "", apiKeyInHeader: // header is the default placement
+		if err := checkHeaderName(cred.Key); err != nil {
+			return authError(hr, fmt.Errorf("api key %s", err))
+		}
 		if err := checkHeaderValue(value); err != nil {
 			return authError(hr, fmt.Errorf("api key %s", err))
 		}

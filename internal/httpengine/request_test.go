@@ -94,7 +94,7 @@ func TestCheckMethod(t *testing.T) {
 		{method: "HEAD"},
 		{method: "OPTIONS"},
 		{method: "TRACE"},
-		{method: "CONNECT"},
+		{method: "CONNECT", want: KindUnsupported}, // authority-form; http.Client cannot send it
 		{method: "WS", want: KindUnsupported},
 		{method: "GRPC", want: KindUnsupported},
 		{method: "GRAPHQL", want: KindUnsupported},
@@ -183,13 +183,13 @@ func TestApplyHeaders(t *testing.T) {
 	hr, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://x/v1", nil)
 	require.NoError(t, err)
 
-	applyHeaders(hr, []model.Header{
+	require.NoError(t, applyHeaders(hr, []model.Header{
 		{Key: "accept", Value: "application/json"},
 		{Key: "Accept", Value: "text/plain"}, // a repeated key accumulates
 		{Key: "X-Trace-Id", Value: "abc"},
 		{Key: "host", Value: "internal.example.com"},
 		{Key: "", Value: "dropped"},
-	}, "application/json")
+	}, "application/json"))
 
 	require.Equal(t, []string{"application/json", "text/plain"}, hr.Header.Values("Accept"))
 	require.Equal(t, "abc", hr.Header.Get("X-Trace-Id"))
@@ -203,12 +203,66 @@ func TestApplyHeadersExplicitContentTypeWins(t *testing.T) {
 	hr, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://x/v1", nil)
 	require.NoError(t, err)
 
-	applyHeaders(hr, []model.Header{
+	require.NoError(t, applyHeaders(hr, []model.Header{
 		{Key: "Content-Type", Value: "application/vnd.api+json"},
-	}, "application/json")
+	}, "application/json"))
 
 	require.Equal(t, []string{"application/vnd.api+json"}, hr.Header.Values("Content-Type"),
 		"the inferred type is only a default and must be replaced, not appended to")
+}
+
+func TestApplyHeadersRejectsWhatTheTransportCannotSend(t *testing.T) {
+	// The transport refuses malformed names and values at write time with a message
+	// classify cannot attribute, so the failure would reach the user as "unknown" instead
+	// of "invalid request". These become plausible once variables land in header fields.
+	tests := []struct {
+		name    string
+		header  model.Header
+		wantMsg string
+	}{
+		{
+			name:    "space in the name",
+			header:  model.Header{Key: "X Api Key", Value: "k-1"},
+			wantMsg: `header name "X Api Key" is not a valid token`,
+		},
+		{
+			name:    "separator in the name",
+			header:  model.Header{Key: "X-Api:Key", Value: "k-1"},
+			wantMsg: `header name "X-Api:Key" is not a valid token`,
+		},
+		{
+			name:    "newline in the name",
+			header:  model.Header{Key: "X-Api\nKey", Value: "k-1"},
+			wantMsg: "is not a valid token",
+		},
+		{
+			name:    "injected value",
+			header:  model.Header{Key: "X-Trace-Id", Value: "abc\r\nX-Evil: 1"},
+			wantMsg: `header "X-Trace-Id" value contains a line break`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hr, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://x/v1", nil)
+			require.NoError(t, err)
+			require.ErrorContains(t, applyHeaders(hr, []model.Header{tt.header}, ""), tt.wantMsg)
+		})
+	}
+}
+
+func TestApplyHeadersAcceptsUnusualButValidNames(t *testing.T) {
+	hr, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://x/v1", nil)
+	require.NoError(t, err)
+
+	require.NoError(t, applyHeaders(hr, []model.Header{
+		{Key: "X-Api-Key_v2", Value: "k-1"},
+		{Key: "If-None-Match", Value: `W/"etag"`},
+		{Key: "$weird*but'legal", Value: "1"},
+	}, ""))
+
+	require.Equal(t, "k-1", hr.Header.Get("X-Api-Key_v2"))
+	require.Equal(t, `W/"etag"`, hr.Header.Get("If-None-Match"))
 }
 
 func TestBuildBodyTextShapes(t *testing.T) {
@@ -585,6 +639,15 @@ func TestNewRequestErrors(t *testing.T) {
 		{
 			name: "unresolved url",
 			req:  model.Request{Method: http.MethodGet, URL: "{{baseUrl}}/users"},
+			want: KindRequest,
+		},
+		{
+			name: "malformed header name",
+			req: model.Request{
+				Method:  http.MethodGet,
+				URL:     "https://x/v1",
+				Headers: []model.Header{{Key: "X Api Key", Value: "k-1"}},
+			},
 			want: KindRequest,
 		},
 		{

@@ -22,9 +22,13 @@ import (
 // request, before anything is sent.
 const opBuildRequest = "build request"
 
-// httpMethods are the methods this engine sends over HTTP. model.ValidMethod also
-// accepts the WS, GRPC, and GRAPHQL pseudo-methods, which dedicated protocol handlers
-// own, so they are rejected here rather than silently sent as HTTP verbs.
+// httpMethods are the methods this engine sends over HTTP. model.ValidMethod also accepts
+// the WS, GRPC, and GRAPHQL pseudo-methods, which dedicated protocol handlers own, so they
+// are rejected here rather than silently sent as HTTP verbs.
+//
+// CONNECT is absent on purpose: it addresses a tunnel in authority-form (host:port, no
+// path), which http.Client cannot express, so accepting it would only produce a malformed
+// request the server rejects.
 var httpMethods = map[string]struct{}{
 	"GET":     {},
 	"POST":    {},
@@ -34,7 +38,6 @@ var httpMethods = map[string]struct{}{
 	"HEAD":    {},
 	"OPTIONS": {},
 	"TRACE":   {},
-	"CONNECT": {},
 }
 
 // FileOpener opens the files a multipart or binary body references. It is an interface
@@ -99,7 +102,9 @@ func newRequest(ctx context.Context, req model.Request, opener FileOpener) (*htt
 	if err != nil {
 		return nil, newError(KindRequest, opBuildRequest, req.URL, err)
 	}
-	applyHeaders(hr, req.Headers, body.contentType)
+	if err := applyHeaders(hr, req.Headers, body.contentType); err != nil {
+		return nil, newError(KindRequest, opBuildRequest, req.URL, err)
+	}
 	if err := applyAuth(hr, req.Auth); err != nil {
 		return nil, err // credentials are attached last so they win over a typed header
 	}
@@ -178,14 +183,21 @@ func appendQuery(u *url.URL, params []model.Param) {
 // Content-Type is only a default: an explicit header replaces it, while a key repeated
 // by the user accumulates (two Accept entries stay two entries). A Host header is lifted
 // onto Request.Host, because the transport ignores Header["Host"].
-func applyHeaders(hr *http.Request, headers []model.Header, contentType string) {
+func applyHeaders(hr *http.Request, headers []model.Header, contentType string) error {
 	if contentType != "" {
 		hr.Header.Set("Content-Type", contentType)
 	}
+
 	seen := make(map[string]bool, len(headers))
 	for _, h := range headers {
 		if h.Key == "" {
-			continue
+			continue // a blank row is an unfilled form field, not a malformed header
+		}
+		if err := checkHeaderName(h.Key); err != nil {
+			return err
+		}
+		if err := checkHeaderValue(h.Value); err != nil {
+			return fmt.Errorf("header %q %s", h.Key, err)
 		}
 		if strings.EqualFold(h.Key, "Host") {
 			hr.Host = h.Value
@@ -198,6 +210,30 @@ func applyHeaders(hr *http.Request, headers []model.Header, contentType string) 
 		}
 		hr.Header.Set(key, h.Value)
 		seen[key] = true
+	}
+	return nil
+}
+
+// checkHeaderName rejects a name the transport would refuse to write. Go validates field
+// names at write time and fails with a message classify cannot attribute, so catching it
+// here is the difference between a clear "invalid request" and an unattributable failure —
+// and once variables are substituted into header names, malformed ones stop being rare.
+func checkHeaderName(name string) error {
+	if strings.ContainsFunc(name, func(r rune) bool { return !isTokenRune(r) }) {
+		return fmt.Errorf("header name %q is not a valid token", name)
+	}
+	return nil
+}
+
+// isTokenRune reports whether r may appear in a field name. RFC 9110 field names are
+// tokens: letters, digits, and a short list of symbols — no spaces, separators, or control
+// characters.
+func isTokenRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	default:
+		return strings.ContainsRune("!#$%&'*+-.^_`|~", r)
 	}
 }
 

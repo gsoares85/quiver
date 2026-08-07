@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gsoares85/quiver/internal/model"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,8 +27,10 @@ func chainServer(t *testing.T) *httptest.Server {
 		_, _ = w.Write([]byte("arrived"))
 	})
 	mux.HandleFunc("/hop/", func(w http.ResponseWriter, r *http.Request) {
+		// assert rather than require: this runs on the server's goroutine, where FailNow
+		// is unsupported.
 		n, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/hop/"))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		if n <= 1 {
 			http.Redirect(w, r, "/done", http.StatusFound)
 			return
@@ -147,8 +150,11 @@ func TestClientDropsCredentialsOnACrossHostRedirect(t *testing.T) {
 
 	targetURL, err := url.Parse(target.URL)
 	require.NoError(t, err)
-	// httptest listens on 127.0.0.1; addressing it as localhost makes it a different
-	// host to the redirect rules while still reaching the same server.
+	// Go compares hostnames, not host:port, when deciding whether a redirect leaves the
+	// origin — so two httptest servers are both "127.0.0.1" and would prove nothing here.
+	// Addressing the target as localhost makes it a genuinely different host while still
+	// reaching the same listener. This is the one test that needs localhost to resolve to
+	// the loopback interface.
 	crossHost := "http://" + net.JoinHostPort("localhost", targetURL.Port()) + "/target"
 
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -212,22 +218,61 @@ func TestNewTransportDefaults(t *testing.T) {
 	require.Nil(t, tr.TLSClientConfig, "verification stays at the standard library's defaults")
 }
 
-func TestTraceFromPlainHTTP(t *testing.T) {
+func TestFinishTracePlainHTTP(t *testing.T) {
 	srv := chainServer(t)
 
 	resp, hops, err := do(t, srv.URL+"/done", model.RequestSettings{})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, resp.Body.Close()) }()
 
-	trace := traceFrom(resp, hops, false, "127.0.0.1:8080")
+	clk := newFakeClock()
+	tm := newTimings(clk.now)
+	tm.begin()
+	clk.advance(7 * time.Millisecond)
+
+	trace, _ := finishTrace(tm, hops, resp)
 	require.Equal(t, "HTTP/1.1", trace.Proto)
 	require.Nil(t, trace.TLS, "a plain connection negotiates no tls")
 	require.False(t, trace.ConnReused)
-	require.Equal(t, "127.0.0.1:8080", trace.RemoteAddr)
 	require.Empty(t, trace.Redirects)
+	require.Empty(t, trace.Trailers)
+	require.Equal(t, model.Duration(7*time.Millisecond), trace.Duration)
 }
 
-func TestTraceFromTLS(t *testing.T) {
+func TestFinishTraceWithoutAResponse(t *testing.T) {
+	// A request that never got a response still has a story: how long it took, and how far
+	// down a redirect chain it made it.
+	clk := newFakeClock()
+	tm := newTimings(clk.now)
+	tm.begin()
+	clk.advance(30 * time.Second)
+
+	hops := []RedirectHop{{Status: 302, From: "https://a/x", To: "https://b/x"}}
+	trace, _ := finishTrace(tm, hops, nil)
+
+	require.Equal(t, model.Duration(30*time.Second), trace.Duration, "a failure reports how long it took")
+	require.Equal(t, hops, trace.Redirects)
+	require.Empty(t, trace.Proto, "nothing was negotiated")
+	require.Nil(t, trace.TLS)
+}
+
+func TestFinishTraceCapturesTrailers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Trailer", "X-Checksum")
+		_, _ = w.Write([]byte("payload"))
+		w.Header().Set("X-Checksum", "abc123") // set after the body: a real trailer
+	}))
+	defer srv.Close()
+
+	resp, hops, err := do(t, srv.URL, model.RequestSettings{})
+	require.NoError(t, err)
+	require.Equal(t, "payload", readAll(t, resp)) // trailers only arrive once the body ends
+
+	trace, _ := finishTrace(newTimings(newFakeClock().now), hops, resp)
+	require.Equal(t, []model.Header{{Key: "X-Checksum", Value: "abc123", Enabled: true}}, trace.Trailers)
+}
+
+func TestFinishTraceTLS(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("secure"))
 	}))
@@ -239,8 +284,8 @@ func TestTraceFromTLS(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, resp.Body.Close()) }()
 
-	trace := traceFrom(resp, nil, true, "127.0.0.1:443")
-	require.True(t, trace.ConnReused)
+	trace, _ := finishTrace(newTimings(time.Now), nil, resp)
+	require.False(t, trace.ConnReused)
 	require.NotNil(t, trace.TLS)
 	require.Equal(t, "TLS 1.3", trace.TLS.Version)
 	require.Contains(t, trace.TLS.CipherSuite, "TLS_")
@@ -269,7 +314,7 @@ func TestTransportNegotiatesHTTP2(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "h2", readAll(t, resp))
 
-	trace := traceFrom(resp, rec.hops, false, "")
+	trace, _ := finishTrace(newTimings(time.Now), rec.hops, resp)
 	require.Equal(t, "HTTP/2.0", trace.Proto)
 	require.NotNil(t, trace.TLS)
 }

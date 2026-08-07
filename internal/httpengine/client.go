@@ -20,11 +20,13 @@ const defaultMaxRedirects = 10
 // is the versioned storage contract, and widening it for data nobody saves would cost a
 // schema migration.
 type Trace struct {
-	Redirects  []RedirectHop `json:"redirects,omitempty"`
-	Proto      string        `json:"proto"`
-	TLS        *TLSInfo      `json:"tls,omitempty"`
-	ConnReused bool          `json:"connReused"`
-	RemoteAddr string        `json:"remoteAddr,omitempty"`
+	Redirects  []RedirectHop  `json:"redirects,omitempty"`
+	Proto      string         `json:"proto,omitempty"` // empty when no response arrived
+	TLS        *TLSInfo       `json:"tls,omitempty"`
+	Trailers   []model.Header `json:"trailers,omitempty"` // headers that followed the body
+	ConnReused bool           `json:"connReused"`
+	RemoteAddr string         `json:"remoteAddr,omitempty"`
+	Duration   model.Duration `json:"duration"` // how long the exchange took, success or not
 }
 
 // RedirectHop is one link in a followed redirect chain.
@@ -112,14 +114,28 @@ func buildClient(transport http.RoundTripper, settings model.RequestSettings, re
 	}
 }
 
-// traceFrom summarizes how a completed response was obtained.
-func traceFrom(resp *http.Response, hops []RedirectHop, reused bool, remoteAddr string) *Trace {
+// finishTrace closes out an exchange: it samples the clock once and describes how the
+// request went — the hops it followed, the connection it used, how long it took, and, when
+// a response did arrive, what that connection negotiated. resp is nil for a request that
+// never got one, which is exactly why a failure can still be described.
+//
+// It returns the per-phase timing alongside the trace because sampling the clock twice
+// would report two different totals for one request.
+func finishTrace(t *timings, hops []RedirectHop, resp *http.Response) (*Trace, model.Timing) {
+	timing, elapsed := t.result()
+	reused, remoteAddr := t.conn()
+
 	trace := &Trace{
 		Redirects:  hops,
-		Proto:      resp.Proto,
 		ConnReused: reused,
 		RemoteAddr: remoteAddr,
+		Duration:   elapsed,
 	}
+	if resp == nil {
+		return trace, timing
+	}
+
+	trace.Proto = resp.Proto
 	if state := resp.TLS; state != nil {
 		trace.TLS = &TLSInfo{
 			Version:     tls.VersionName(state.Version),
@@ -127,5 +143,10 @@ func traceFrom(resp *http.Response, hops []RedirectHop, reused bool, remoteAddr 
 			ServerName:  state.ServerName,
 		}
 	}
-	return trace
+	// Trailers only carry values once the body has been read to the end, which is where
+	// this is called from.
+	if len(resp.Trailer) > 0 {
+		trace.Trailers = headersFrom(resp.Trailer)
+	}
+	return trace, timing
 }

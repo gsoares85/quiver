@@ -3,6 +3,7 @@ package httpengine
 import (
 	"context"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/gsoares85/quiver/internal/model"
@@ -27,7 +28,7 @@ type Chunk struct {
 	Body  []byte          // a slice of body bytes, in order
 	Done  *model.Response // terminal: the assembled response, with timing
 	Err   error           // terminal: the request failed (never set together with Done)
-	Trace *Trace          // how the response was obtained; set alongside Done
+	Trace *Trace          // how the exchange went; set alongside either terminal chunk
 }
 
 // httpEngine is the HTTP implementation of Engine. Its transport is shared across every
@@ -111,13 +112,25 @@ func (e *httpEngine) run(ctx context.Context, hr *http.Request, settings model.R
 	resp, err := buildClient(e.transport, settings, redirects).Do(hr)
 	if err != nil {
 		// A CheckRedirect failure hands back the last response with its body already
-		// closed, so there is nothing here to stream — only a failure to report.
-		sendFinal(ctx, out, Chunk{Err: classify(opSendRequest, hr.URL.String(), err)})
+		// closed, so there is nothing here to stream — only a failure to report. The trace
+		// still goes with it: "failed after 30s, having followed 3 redirects" is the part
+		// worth showing.
+		trace, _ := finishTrace(timings, redirects.hops, nil)
+		sendFinal(ctx, out, Chunk{
+			Err:   classify(opSendRequest, hr.URL.String(), err),
+			Trace: trace,
+		})
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	meta := metaFrom(resp)
+	// Take Done's copy of the headers before Meta leaves: once the caller holds that
+	// chunk it may do as it likes with it, and cloning afterwards would both read what it
+	// wrote and race with it. Body chunks are kept unaliased for the same reason.
+	done := *meta
+	done.Headers = slices.Clone(meta.Headers)
+
 	if !send(ctx, out, Chunk{Meta: meta}) {
 		return
 	}
@@ -127,22 +140,21 @@ func (e *httpEngine) run(ctx context.Context, hr *http.Request, settings model.R
 	body, size, err := streamBody(ctx, resp.Body, resp.ContentLength, out)
 	if err != nil {
 		// The chunks that did arrive have already been delivered; this ends the stream.
-		sendFinal(ctx, out, Chunk{Err: classify(opReadBody, hr.URL.String(), err)})
+		trace, _ := finishTrace(timings, redirects.hops, resp)
+		sendFinal(ctx, out, Chunk{
+			Err:   classify(opReadBody, hr.URL.String(), err),
+			Trace: trace,
+		})
 		return
 	}
 
-	timing, total := timings.result()
-	reused, remoteAddr := timings.conn()
-	done := *meta
+	trace, timing := finishTrace(timings, redirects.hops, resp)
 	done.Body = body
 	done.Size = size
-	done.Duration = total
+	done.Duration = trace.Duration
 	done.Timing = timing
 
-	sendFinal(ctx, out, Chunk{
-		Done:  &done,
-		Trace: traceFrom(resp, redirects.hops, reused, remoteAddr),
-	})
+	sendFinal(ctx, out, Chunk{Done: &done, Trace: trace})
 }
 
 // send delivers a chunk unless the caller has gone away, reporting whether it landed.
