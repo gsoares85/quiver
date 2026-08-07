@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/gsoares85/quiver/internal/buildinfo"
 	"github.com/gsoares85/quiver/internal/model"
 )
 
@@ -78,6 +79,11 @@ type wireBody struct {
 // quoteEscaper mirrors mime/multipart's own escaping of quotes and backslashes inside
 // Content-Disposition parameters, which the standard library keeps unexported.
 var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
+
+// userAgent identifies Quiver to the servers it calls. Without it requests would advertise
+// the standard library's "Go-http-client/1.1", which tells an operator reading their logs
+// nothing about what actually called them.
+var userAgent = "quiver/" + strings.TrimPrefix(buildinfo.Get().Version, "v")
 
 // newRequest builds the wire request for a resolved model.Request: it validates the
 // method and URL, merges the authored query parameters, applies the headers and
@@ -184,6 +190,8 @@ func appendQuery(u *url.URL, params []model.Param) {
 // by the user accumulates (two Accept entries stay two entries). A Host header is lifted
 // onto Request.Host, because the transport ignores Header["Host"].
 func applyHeaders(hr *http.Request, headers []model.Header, contentType string) error {
+	// Identify the client before anything else, so an explicit User-Agent replaces it.
+	hr.Header.Set("User-Agent", userAgent)
 	if contentType != "" {
 		hr.Header.Set("Content-Type", contentType)
 	}

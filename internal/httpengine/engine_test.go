@@ -519,6 +519,20 @@ func TestExecuteReportsTrailers(t *testing.T) {
 	require.Equal(t, got.done.Duration, got.trace.Duration, "one clock reading, reported once")
 }
 
+func TestExecuteIdentifiesQuiverToTheServer(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.UserAgent()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	out := execute(t, context.Background(), model.Request{Method: http.MethodGet, URL: srv.URL})
+	require.NoError(t, out.err)
+	require.Equal(t, userAgent, got)
+	require.NotContains(t, got, "Go-http-client")
+}
+
 func TestExecuteReportsAServerErrorAsAResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

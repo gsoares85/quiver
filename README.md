@@ -160,6 +160,9 @@ the desktop shell.
   can say something useful and the CLI can turn them into meaningful exit codes.
 - **Proxies and TLS.** `HTTP(S)_PROXY` and `NO_PROXY` are honored by default, and
   certificate verification is always on.
+- **Requests say who they are.** They go out as `quiver/<version>`, so an operator reading
+  their access logs can tell what called them; setting your own `User-Agent` header
+  overrides it.
 
 ## Development
 

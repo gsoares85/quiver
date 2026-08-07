@@ -265,6 +265,20 @@ func TestApplyHeadersAcceptsUnusualButValidNames(t *testing.T) {
 	require.Equal(t, `W/"etag"`, hr.Header.Get("If-None-Match"))
 }
 
+func TestApplyHeadersIdentifiesQuiver(t *testing.T) {
+	hr, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://x/v1", nil)
+	require.NoError(t, err)
+	require.NoError(t, applyHeaders(hr, nil, ""))
+
+	require.Equal(t, userAgent, hr.Header.Get("User-Agent"))
+	require.True(t, strings.HasPrefix(hr.Header.Get("User-Agent"), "quiver/"),
+		"an operator reading their logs should see what called them")
+
+	// An explicit User-Agent is the user's business, not ours.
+	require.NoError(t, applyHeaders(hr, []model.Header{{Key: "User-Agent", Value: "curl/8.7.1"}}, ""))
+	require.Equal(t, []string{"curl/8.7.1"}, hr.Header.Values("User-Agent"))
+}
+
 func TestBuildBodyTextShapes(t *testing.T) {
 	tests := []struct {
 		name        string
