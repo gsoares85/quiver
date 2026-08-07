@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -431,6 +432,24 @@ func TestExecuteStreamsALargeBodyInChunks(t *testing.T) {
 	require.Greater(t, got.chunks, 1, "a large payload renders progressively, not in one lump")
 	require.Equal(t, payload, string(got.body))
 	require.Equal(t, int64(len(payload)), got.done.Size)
+}
+
+func TestExecuteSizesTheBodyFromContentLength(t *testing.T) {
+	// A size that is not a power of two would land in a larger allocation class if the
+	// buffer had been grown into, so an exact capacity is how the hint reaching streamBody
+	// is observable from out here.
+	payload := strings.Repeat("z", 5000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	got := execute(t, context.Background(), model.Request{Method: http.MethodGet, URL: srv.URL})
+
+	require.NoError(t, got.err)
+	require.Equal(t, payload, string(got.done.Body))
+	require.Equal(t, len(payload), cap(got.done.Body))
 }
 
 func TestExecuteReportsAServerErrorAsAResponse(t *testing.T) {

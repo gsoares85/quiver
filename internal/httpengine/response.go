@@ -17,6 +17,12 @@ const (
 	// keep syscalls cheap and small enough that a progress bar still moves.
 	defaultChunkSize = 32 * 1024
 
+	// maxPrealloc bounds how much buffer a Content-Length may claim up front. The header
+	// is server-controlled, so it is a hint to size against, never a promise: without a
+	// ceiling, "Content-Length: 10000000000" would be an out-of-memory on arrival. A
+	// larger response still works — it just grows the ordinary way past this point.
+	maxPrealloc = 8 << 20
+
 	// opReadBody labels failures raised while streaming a response body.
 	opReadBody = "read response body"
 )
@@ -66,12 +72,21 @@ func headersFrom(header http.Header) []model.Header {
 // Size counts what the caller receives, which is the decompressed payload whenever the
 // transport handled the encoding. Each chunk is a fresh slice: the read buffer is reused,
 // and handing the same array to a consumer twice would corrupt what it already has.
-func streamBody(ctx context.Context, body io.Reader, out chan<- Chunk) ([]byte, int64, error) {
+//
+// sizeHint is the response's Content-Length, or a negative number when it is unknown. It
+// only sizes the buffer up front — a download that outgrows it, or one that never reaches
+// it, is assembled just the same.
+func streamBody(ctx context.Context, body io.Reader, sizeHint int64, out chan<- Chunk) ([]byte, int64, error) {
 	var (
 		assembled []byte
 		size      int64
 		buf       = make([]byte, defaultChunkSize)
 	)
+	if sizeHint > 0 {
+		// Growing by append recopies the whole payload every time it doubles, which on a
+		// large download is the difference between one allocation and dozens.
+		assembled = make([]byte, 0, min(sizeHint, maxPrealloc))
+	}
 	for {
 		n, err := body.Read(buf)
 		if n > 0 {

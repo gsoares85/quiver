@@ -122,7 +122,9 @@ func (e *httpEngine) run(ctx context.Context, hr *http.Request, settings model.R
 		return
 	}
 
-	body, size, err := streamBody(ctx, resp.Body, out)
+	// resp.ContentLength is -1 when the length is unknown, including whenever the
+	// transport decompressed the body, so the hint is never misleading.
+	body, size, err := streamBody(ctx, resp.Body, resp.ContentLength, out)
 	if err != nil {
 		// The chunks that did arrive have already been delivered; this ends the stream.
 		sendFinal(ctx, out, Chunk{Err: classify(opReadBody, hr.URL.String(), err)})

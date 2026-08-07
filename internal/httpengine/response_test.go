@@ -105,7 +105,7 @@ func TestStreamBodyChunksInOrder(t *testing.T) {
 		err       error
 	)
 	chunks := drain(t, func(out chan<- Chunk) {
-		assembled, size, err = streamBody(context.Background(), strings.NewReader(payload), out)
+		assembled, size, err = streamBody(context.Background(), strings.NewReader(payload), int64(len(payload)), out)
 	})
 
 	require.NoError(t, err)
@@ -130,7 +130,7 @@ func TestStreamBodyGivesEachChunkItsOwnSlice(t *testing.T) {
 
 	var assembled []byte
 	chunks := drain(t, func(out chan<- Chunk) {
-		assembled, _, _ = streamBody(context.Background(), strings.NewReader(payload), out)
+		assembled, _, _ = streamBody(context.Background(), strings.NewReader(payload), int64(len(payload)), out)
 	})
 	require.Len(t, chunks, 2)
 
@@ -147,7 +147,7 @@ func TestStreamBodyStopsWhenTheCallerGoesAway(t *testing.T) {
 	cancel()
 
 	out := make(chan Chunk) // unbuffered: the send can only complete if someone reads
-	_, _, err := streamBody(ctx, strings.NewReader("payload"), out)
+	_, _, err := streamBody(ctx, strings.NewReader("payload"), -1, out)
 	require.ErrorIs(t, err, context.Canceled)
 }
 
@@ -159,7 +159,7 @@ func TestStreamBodySurfacesReadFailures(t *testing.T) {
 	)
 	chunks := drain(t, func(out chan<- Chunk) {
 		reader := io.MultiReader(strings.NewReader("partial"), errReader{errors.New("connection reset")})
-		assembled, size, err = streamBody(context.Background(), reader, out)
+		assembled, size, err = streamBody(context.Background(), reader, -1, out)
 	})
 
 	require.ErrorContains(t, err, "connection reset")
@@ -175,13 +175,57 @@ func TestStreamBodyWithNoContent(t *testing.T) {
 		err       error
 	)
 	chunks := drain(t, func(out chan<- Chunk) {
-		assembled, size, err = streamBody(context.Background(), http.NoBody, out)
+		assembled, size, err = streamBody(context.Background(), http.NoBody, -1, out)
 	})
 
 	require.NoError(t, err)
 	require.Empty(t, assembled)
 	require.Zero(t, size)
 	require.Empty(t, chunks, "an empty body produces no chunk at all")
+}
+
+func TestStreamBodySizesTheBufferFromTheHint(t *testing.T) {
+	payload := strings.Repeat("x", 5000)
+
+	var assembled []byte
+	drain(t, func(out chan<- Chunk) {
+		assembled, _, _ = streamBody(context.Background(), strings.NewReader(payload), int64(len(payload)), out)
+	})
+
+	require.Equal(t, payload, string(assembled))
+	require.Equal(t, len(payload), cap(assembled),
+		"a known Content-Length is allocated once instead of grown into")
+}
+
+func TestStreamBodyCapsWhatAContentLengthMayClaim(t *testing.T) {
+	// Content-Length is server-controlled. Sizing a buffer against an absurd claim would
+	// hand any endpoint an out-of-memory button.
+	var assembled []byte
+	drain(t, func(out chan<- Chunk) {
+		assembled, _, _ = streamBody(context.Background(), strings.NewReader("tiny"), 1<<40, out)
+	})
+
+	require.Equal(t, "tiny", string(assembled))
+	require.LessOrEqual(t, cap(assembled), maxPrealloc, "the claim is a hint, not an allocation order")
+}
+
+func TestStreamBodyOutgrowsAnUnderstatedHint(t *testing.T) {
+	// A server that understates Content-Length must not cost us bytes: the hint only sizes
+	// the buffer, it never bounds what is read.
+	payload := strings.Repeat("y", 40_000)
+
+	var (
+		assembled []byte
+		size      int64
+		err       error
+	)
+	drain(t, func(out chan<- Chunk) {
+		assembled, size, err = streamBody(context.Background(), strings.NewReader(payload), 10, out)
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, payload, string(assembled))
+	require.Equal(t, int64(len(payload)), size)
 }
 
 // errReader fails on the first read.
