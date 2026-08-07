@@ -77,9 +77,9 @@ type wireBody struct {
 var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
 
 // newRequest builds the wire request for a resolved model.Request: it validates the
-// method and URL, merges the authored query parameters, attaches a re-openable body,
-// and applies the request's headers. Variables must already be substituted and auth
-// inheritance flattened by the caller; errors are *Error values ready to surface.
+// method and URL, merges the authored query parameters, applies the headers and
+// credentials, and attaches a re-openable body. Variables must already be substituted and
+// auth inheritance flattened by the caller; errors are *Error values ready to surface.
 func newRequest(ctx context.Context, req model.Request, opener FileOpener) (*http.Request, error) {
 	if err := checkMethod(req.Method, req.URL); err != nil {
 		return nil, err
@@ -95,24 +95,26 @@ func newRequest(ctx context.Context, req model.Request, opener FileOpener) (*htt
 		return nil, newError(KindRequest, opBuildRequest, req.URL, err)
 	}
 
-	var initial io.ReadCloser
-	if body.open != nil {
-		if initial, err = body.open(); err != nil {
-			return nil, newError(KindRequest, opBuildRequest, req.URL, err)
-		}
-	}
-
-	hr, err := http.NewRequestWithContext(ctx, req.Method, u.String(), initial)
+	hr, err := http.NewRequestWithContext(ctx, req.Method, u.String(), nil)
 	if err != nil {
 		return nil, newError(KindRequest, opBuildRequest, req.URL, err)
-	}
-	if body.open != nil {
-		hr.ContentLength = body.contentLength
-		hr.GetBody = body.open // lets the client replay the payload across a redirect
 	}
 	applyHeaders(hr, req.Headers, body.contentType)
 	if err := applyAuth(hr, req.Auth); err != nil {
 		return nil, err // credentials are attached last so they win over a typed header
+	}
+
+	// The payload is opened last, once nothing left can fail. A body that is opened and
+	// then thrown away strands the file it holds, and a multipart one also strands the
+	// goroutine streaming it into a pipe that nobody will ever read or close.
+	if body.open != nil {
+		payload, err := body.open()
+		if err != nil {
+			return nil, newError(KindRequest, opBuildRequest, req.URL, err)
+		}
+		hr.Body = payload
+		hr.ContentLength = body.contentLength
+		hr.GetBody = body.open // lets the client replay the payload across a redirect
 	}
 	return hr, nil
 }

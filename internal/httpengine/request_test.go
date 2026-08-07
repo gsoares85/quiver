@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,10 +25,14 @@ import (
 // counts closes so a test can prove a streaming goroutine released its file.
 type fakeOpener struct {
 	files    map[string]string
-	opens    map[string]int
 	err      error
 	closeErr error
 	closes   atomic.Int32
+
+	// mu guards opens: a multipart body is streamed from its own goroutine, so opens are
+	// counted from there while a test reads them.
+	mu    sync.Mutex
+	opens map[string]int
 }
 
 func newFakeOpener(files map[string]string) *fakeOpener {
@@ -42,8 +47,17 @@ func (f *fakeOpener) Open(path string) (io.ReadCloser, int64, error) {
 	if !ok {
 		return nil, 0, fmt.Errorf("open %s: %w", path, os.ErrNotExist)
 	}
+	f.mu.Lock()
 	f.opens[path]++
+	f.mu.Unlock()
 	return &fakeFile{Reader: strings.NewReader(content), opener: f}, int64(len(content)), nil
+}
+
+// openCount reports how many times path has been opened.
+func (f *fakeOpener) openCount(path string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.opens[path]
 }
 
 // fakeFile is one open file from a fakeOpener.
@@ -348,7 +362,7 @@ func TestBuildBodyBinaryStreamsTheFile(t *testing.T) {
 
 	// One open to sample the size, then one per send — never a reader that is already
 	// drained.
-	require.Equal(t, 3, opener.opens["/tmp/report.pdf"])
+	require.Equal(t, 3, opener.openCount("/tmp/report.pdf"))
 }
 
 func TestBuildBodyMultipart(t *testing.T) {
@@ -594,6 +608,53 @@ func TestNewRequestErrors(t *testing.T) {
 			require.Equal(t, tt.req.URL, err.(*Error).URL)
 		})
 	}
+}
+
+func TestNewRequestLeavesNoFileOpenWhenItIsRejected(t *testing.T) {
+	// Nothing closes a body that never reaches a request, so the payload must not be
+	// opened while a later step can still reject the request. Sampling the file's size is
+	// the only open allowed here, and it closes itself.
+	opener := newFakeOpener(map[string]string{"/tmp/report.pdf": "payload"})
+
+	hr, err := newRequest(context.Background(), model.Request{
+		Method: http.MethodPost,
+		URL:    "https://api.example.com/v1",
+		Body:   &model.Body{Type: model.BodyBinary, Files: []model.FileRef{{Path: "/tmp/report.pdf"}}},
+		Auth:   &model.Auth{Type: model.AuthInherit}, // rejected after the payload would have opened
+	}, opener)
+	require.Nil(t, hr)
+	require.Equal(t, KindRequest, KindOf(err))
+
+	require.Equal(t, 1, opener.openCount("/tmp/report.pdf"), "a doomed request must not open its payload")
+	require.Equal(t, int32(1), opener.closes.Load(), "every open is matched by a close")
+}
+
+func TestNewRequestDoesNotStrandTheMultipartWriter(t *testing.T) {
+	// A multipart payload is written by a goroutine feeding a pipe. Opening it before the
+	// request is known to be sendable would strand that goroutine forever — blocked on a
+	// pipe nobody will read, holding the file it opened. An unresolved token on a request
+	// with an attachment is the everyday way to hit this.
+	opener := newFakeOpener(map[string]string{"/tmp/logo.png": strings.Repeat("PNG", 8192)})
+
+	hr, err := newRequest(context.Background(), model.Request{
+		Method: http.MethodPost,
+		URL:    "https://api.example.com/v1",
+		Body: &model.Body{
+			Type:  model.BodyMultipart,
+			Files: []model.FileRef{{Field: "avatar", Path: "/tmp/logo.png"}},
+		},
+		Auth: &model.Auth{Type: model.AuthBearer, Bearer: &model.BearerAuth{Token: ""}},
+	}, opener)
+	require.Nil(t, hr)
+	require.Equal(t, KindRequest, KindOf(err))
+
+	// A stranded writer always gives itself away: it opens the file it is streaming and
+	// blocks before its deferred Close can run. Never rather than a single check, because
+	// the goroutine would be spawned during newRequest and reach the file a moment later.
+	require.Never(t, func() bool { return opener.openCount("/tmp/logo.png") > 1 },
+		200*time.Millisecond, 10*time.Millisecond,
+		"the payload was opened by a writer goroutine that nothing will ever read or close")
+	require.Equal(t, int32(1), opener.closes.Load(), "every open is matched by a close")
 }
 
 func TestNewRequestReportsBodyOpenFailure(t *testing.T) {
