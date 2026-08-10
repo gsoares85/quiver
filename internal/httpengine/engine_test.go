@@ -217,6 +217,35 @@ func TestExecuteFollowsRedirectsAndReportsTheChain(t *testing.T) {
 	require.Equal(t, srv.URL+"/done", got.trace.Redirects[1].To)
 }
 
+func TestExecuteLosesAQueryApiKeyAcrossARedirect(t *testing.T) {
+	// A redirect's next URL comes from the Location header, so nothing from the original
+	// query string travels with it — including an api key placed there. The request arrives
+	// unauthenticated, which is surprising enough to be worth pinning and documenting.
+	var arrivedWith string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/target" {
+			arrivedWith = r.URL.RawQuery
+			_, _ = w.Write([]byte("arrived"))
+			return
+		}
+		http.Redirect(w, r, "/target", http.StatusFound)
+	}))
+	defer srv.Close()
+
+	got := execute(t, context.Background(), model.Request{
+		Method: http.MethodGet,
+		URL:    srv.URL + "/start",
+		Auth: &model.Auth{Type: model.AuthAPIKey, APIKey: &model.APIKeyAuth{
+			Key: "api_key", Value: "k-1", In: "query",
+		}},
+		Settings: model.RequestSettings{FollowRedirects: true, MaxRedirects: 3},
+	})
+
+	require.NoError(t, got.err)
+	require.Equal(t, "arrived", string(got.done.Body))
+	require.Empty(t, arrivedWith, "the key did not survive the hop, and the readme says so")
+}
+
 func TestExecuteReportsARedirectLimit(t *testing.T) {
 	srv := chainServer(t)
 

@@ -146,8 +146,15 @@ the desktop shell.
   initial reply. A cancelled request stops promptly and still tells you why it ended.
 - **Redirects under your control.** They are off by default, so a 3xx *is* the response,
   `Location` header intact and inspectable. Turn them on and every hop is recorded with
-  its status and both URLs, while `maxRedirects` acts as a real budget. Credentials are
-  never forwarded to a different host.
+  its status and both URLs, while `maxRedirects` acts as a real budget.
+- **What a redirect does to your credentials**, since it is rarely what people assume:
+  an `Authorization` header — Basic, Bearer, or an OAuth 2.0 token — is dropped as soon as
+  a redirect leaves the original host, and kept when it stays. An API key placed in a
+  **custom header** is an ordinary header and travels with the request wherever it goes,
+  including to another host, so only enable redirect following for hosts you would hand
+  that key to directly. An API key placed in the **query string** does not survive a
+  redirect at all, because the next request's URL comes from the `Location` header — a
+  request that follows one arrives without it.
 - **Authentication** applied at send time: Basic, Bearer, and API key (in a header or the
   query string), plus OAuth 2.0 requests that carry an already-acquired token — the grant
   flows themselves come later. Secret values are resolved at run time and never written

@@ -138,9 +138,10 @@ func TestClientFollowsExactlyMaxRedirects(t *testing.T) {
 	require.Len(t, hops, 2)
 }
 
-func TestClientDropsCredentialsOnACrossHostRedirect(t *testing.T) {
-	// The target records what it was sent, so the test can prove the credential did not
-	// travel with the redirect.
+func TestClientDropsAuthorizationOnACrossHostRedirect(t *testing.T) {
+	// The target records what it was sent, so the test can pin exactly which credentials
+	// survive a redirect — which is narrower than "credentials do not leak", and worth
+	// stating precisely because the difference is a real footgun.
 	var got http.Header
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.Header.Clone()
@@ -182,6 +183,7 @@ func TestClientDropsCredentialsOnACrossHostRedirect(t *testing.T) {
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, origin.URL+path, nil)
 		require.NoError(t, err)
 		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set("X-Api-Key", "custom-header-key")
 		req.Header.Set("X-Trace-Id", "abc")
 
 		resp, err := client.Do(req)
@@ -191,8 +193,11 @@ func TestClientDropsCredentialsOnACrossHostRedirect(t *testing.T) {
 	}
 
 	crossed := send("/cross-host")
-	require.Empty(t, crossed.Get("Authorization"), "credentials must not leak to another host")
+	require.Empty(t, crossed.Get("Authorization"), "an Authorization header stops at the origin host")
 	require.Equal(t, "abc", crossed.Get("X-Trace-Id"), "ordinary headers still travel")
+	require.Equal(t, "custom-header-key", crossed.Get("X-Api-Key"),
+		"an api key in a custom header is just a header: it does follow a redirect to another "+
+			"host, which is why the readme says so rather than promising it does not")
 
 	same := send("/same-host")
 	require.Equal(t, "Bearer secret", same.Get("Authorization"),
