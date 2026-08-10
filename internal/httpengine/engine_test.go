@@ -289,6 +289,63 @@ func TestExecuteStopsAStreamingResponseWhenCancelled(t *testing.T) {
 	require.Equal(t, KindCanceled, KindOf(got.err))
 }
 
+// cancellingTransport answers a request and cancels the caller's context on the way out,
+// which is the one moment that makes handing over the response metadata fail. Its body
+// then reports the cancellation, as a real one would.
+type cancellingTransport struct{ cancel context.CancelFunc }
+
+func (t cancellingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.cancel()
+	return &http.Response{
+		Status:     "200 OK",
+		StatusCode: http.StatusOK,
+		Proto:      "HTTP/1.1",
+		Header:     http.Header{"Content-Type": []string{"text/plain"}},
+		Body:       ctxBody{ctx: req.Context()},
+		Request:    req,
+	}, nil
+}
+
+// ctxBody is a response body that fails once its context is done.
+type ctxBody struct{ ctx context.Context }
+
+func (b ctxBody) Read([]byte) (int, error) { return 0, b.ctx.Err() }
+func (b ctxBody) Close() error             { return nil }
+
+func TestExecuteAlwaysEndsWithATerminalChunk(t *testing.T) {
+	// Cancelling between the response arriving and the metadata being handed over used to
+	// close the channel with no terminal chunk at all, leaving the caller to infer what
+	// happened. Whether the metadata wins that race or not is decided by a select on two
+	// ready cases, so the run is repeated: every attempt must end with exactly one Err
+	// explaining itself, and over this many attempts both sides come up.
+	for attempt := range 50 {
+		ctx, cancel := context.WithCancel(context.Background())
+
+		ch, err := New(WithTransport(cancellingTransport{cancel: cancel})).
+			Execute(ctx, model.Request{Method: http.MethodGet, URL: "https://api.example.com/v1"})
+		require.NoError(t, err)
+
+		var terminals int
+		var done *model.Response
+		var failure error
+		for chunk := range ch {
+			switch {
+			case chunk.Done != nil:
+				done = chunk.Done
+				terminals++
+			case chunk.Err != nil:
+				failure = chunk.Err
+				terminals++
+			}
+		}
+		cancel()
+
+		require.Equalf(t, 1, terminals, "attempt %d: a stream ends once, and always says how", attempt)
+		require.Nilf(t, done, "attempt %d: a cancelled request never completes", attempt)
+		require.Equalf(t, KindCanceled, KindOf(failure), "attempt %d", attempt)
+	}
+}
+
 func TestExecuteReportsARefusedConnection(t *testing.T) {
 	// Take a port and immediately give it back, so nothing is listening on it.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

@@ -132,6 +132,15 @@ func (e *httpEngine) run(ctx context.Context, hr *http.Request, settings model.R
 	done.Headers = slices.Clone(meta.Headers)
 
 	if !send(ctx, out, Chunk{Meta: meta}) {
+		// The caller went away before the metadata landed. It still gets exactly one
+		// terminal chunk saying why, the same as a cancellation mid-body does — a stream
+		// that just stops, with nothing to explain it, is the one outcome the contract
+		// does not allow.
+		trace, _ := finishTrace(timings, redirects.hops, resp)
+		sendFinal(ctx, out, Chunk{
+			Err:   classify(opSendRequest, hr.URL.String(), ctx.Err()),
+			Trace: trace,
+		})
 		return
 	}
 
