@@ -175,13 +175,26 @@ func classifyKind(err error) Kind {
 		return KindTimeout
 	}
 
-	// Anything still socket-shaped — a reset, an unreachable network, a body that ended
-	// mid-stream — is a connection failure rather than an unknown one.
+	// Anything still socket-shaped is a connection failure rather than an unknown one: a
+	// reset, an unreachable network, a body that ended mid-stream, or a peer that accepted
+	// the connection and hung up without answering — which the transport reports as a bare
+	// io.EOF carrying no *net.OpError at all. A body that simply ends is never seen here,
+	// because streamBody turns that EOF into a completed response.
 	var opErr *net.OpError
-	if errors.As(err, &opErr) || errors.Is(err, io.ErrUnexpectedEOF) {
+	if errors.As(err, &opErr) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) ||
+		serverClosedIdle(err) {
 		return KindConnection
 	}
 	return KindUnknown
+}
+
+// serverClosedIdle reports whether the transport gave up because the peer had already
+// closed the pooled connection it picked. Go signals this with an unexported sentinel, so
+// matching its message is the only handle it offers — and it is worth having, because the
+// alternative is telling the user their request is unattributably broken when the truth is
+// that a connection went away underneath it.
+func serverClosedIdle(err error) bool {
+	return strings.Contains(err.Error(), "server closed idle connection")
 }
 
 // isTLSError reports whether err comes from the TLS handshake or from certificate

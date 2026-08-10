@@ -152,6 +152,20 @@ func TestClassifyKind(t *testing.T) {
 			want: KindConnection,
 		},
 		{
+			// A peer that accepts and hangs up without answering reaches us as a bare EOF
+			// with no *net.OpError to match on, which is why it needs its own case.
+			name: "peer hung up without answering",
+			err:  &url.Error{Op: "Get", URL: "http://127.0.0.1:1/v1", Err: io.EOF},
+			want: KindConnection,
+		},
+		{
+			// The transport's own wording for a pooled connection the peer had already
+			// closed. It carries no type or sentinel to match on.
+			name: "pooled connection went away",
+			err:  &url.Error{Op: "Get", URL: "http://x/v1", Err: errors.New("http: server closed idle connection")},
+			want: KindConnection,
+		},
+		{
 			name: "unattributable",
 			err:  errors.New("boom"),
 			want: KindUnknown,

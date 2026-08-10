@@ -362,6 +362,34 @@ func TestExecuteReportsARefusedConnection(t *testing.T) {
 	require.Nil(t, got.done)
 }
 
+func TestExecuteReportsAPeerThatHangsUp(t *testing.T) {
+	// A server that accepts the connection and closes it without answering — a crashed
+	// backend, a port held by something that is not an HTTP server — reaches the transport
+	// as a bare EOF with no socket error attached, so it is the one connection failure that
+	// has to be recognised on its own rather than through *net.OpError.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	got := execute(t, context.Background(), model.Request{
+		Method: http.MethodGet,
+		URL:    "http://" + listener.Addr().String() + "/v1",
+	})
+
+	require.Equal(t, KindConnection, KindOf(got.err), "not an unattributable failure")
+	require.Nil(t, got.done)
+}
+
 func TestExecuteWithAnEmptyResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
