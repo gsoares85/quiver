@@ -45,11 +45,13 @@ pipeline that enforces linting, tests, a coverage gate, and cross-platform build
 The shared **domain model** (`internal/model`) defines the core entities — workspaces,
 collections, folders, requests, environments, auth, and bodies — with ULID identities
 and validation; the **git-native storage engine** (`internal/store`) round-trips those
-entities to and from byte-stable `.qv.yaml` files on disk; and the **request engine**
+entities to and from byte-stable `.qv.yaml` files on disk; the **request engine**
 (`internal/httpengine`) sends them, streaming responses back with a per-phase timing
-waterfall, authentication, redirect control, and full cancellation. Next up:
-`{{variable}}` resolution across environments, and the app and CLI surfaces that put the
-engine in front of you.
+waterfall, authentication, redirect control, and full cancellation; and **variable
+resolution** (`internal/vars`) turns a stored request into a resolved one, substituting
+`{{variable}}` references across environments and the surrounding scopes. Next up: reading
+secret values from the OS keychain, and the app and CLI surfaces that put all of this in
+front of you.
 
 ## Architecture at a glance
 
@@ -116,7 +118,8 @@ my-api/                       # workspace root (usually a git repo)
   stay clean; a folder records the authored order of its children in an `order:` list
   (absent order sorts alphabetically).
 - **Secrets stay out of the files.** A secret variable is stored as a reference
-  (`secret: true`, no value); resolving it from the OS keychain is an upcoming feature.
+  (`secret: true`, no value) and its value is fetched at run time; the OS keychain that will
+  supply it is the next piece of work.
 - **Versioned & migratable.** Every file carries a `schemaVersion`; registered
   migrations run on load as the format evolves, so older workspaces keep working.
 - **Safe writes.** Each file is written to a temporary file, fsynced, and renamed over
@@ -124,6 +127,76 @@ my-api/                       # workspace root (usually a git repo)
   per workspace: a save is not a single transaction, so an interrupted one can leave
   some files updated and others not. Machine-local state lives in a git-ignored
   `.quiver/` directory.
+
+## Environments & variables
+
+Write `{{baseUrl}}` in a request and the same collection runs against your laptop, staging,
+and production without anyone editing it. That substitution happens in exactly one place
+(`internal/vars`), which the app and the CLI both resolve through before handing the result
+to the request engine — so `{{baseUrl}}` cannot come to mean two different things depending
+on where you ran it from.
+
+References may appear in the URL, in header and query **names as well as values**, in form
+fields, in the body — including a GraphQL operation's variables — in upload paths, and in
+every credential field. They are not substituted into pre-request or test scripts: those
+read variables through the scripting API instead, because splicing text into code is a
+different and worse idea.
+
+### Where a value comes from
+
+A name is looked up through the scopes around a request, nearest first, and the first one
+that defines it wins:
+
+| Scope | Set by |
+|-------|--------|
+| set during the run | a pre-request script |
+| overrides | `--var key=value` on the command line |
+| environment | `--env staging` |
+| folders, innermost outwards | the folders the request sits in |
+| collection | the collection it belongs to |
+| workspace | `quiver.yaml` |
+
+So a folder can narrow what its collection defines, and an environment overrides both.
+
+The resolver already accepts the values behind the top two rows; the `--var` and `--env`
+flags that will pass them arrive with the CLI runner, and pre-request scripts with the
+scripting host.
+
+### The syntax
+
+- A reference is `{{name}}`, where the name is letters, digits, `_`, `.`, or `-`, with no
+  spaces inside the braces. Anything else that merely looks like one is left alone, so the
+  braces in a CSS block, a JSON object, or a `${SHELL}` expression pass through untouched.
+- A **literal** `{{` is written `\{{`. That is what lets you POST a Handlebars or Jinja
+  template as a payload. The backslash is only special immediately before `{{`.
+- A value may contain references of its own — `{{url}}` → `{{host}}/v1` → `https://…` — and
+  they resolve too. A variable that refers back to itself is reported as a cycle, naming the
+  loop, rather than hanging.
+
+### When something is missing
+
+An unknown variable is never quietly replaced with an empty string; sending
+`Authorization: Bearer ` and puzzling over a 401 is nobody's idea of a good afternoon. The
+request is refused and **every** unresolved name is listed at once, so a fix takes one pass:
+
+```text
+unresolved variables: {{baseUrl}}, {{apiToken}}
+```
+
+### Secrets and disabled entries
+
+- **A secret is fetched, never read from the file.** A variable marked `secret: true` stores
+  no value, and its value is only ever taken from the run-time source — so a value that
+  somehow ended up in a committed file is ignored rather than used, and "secrets never live
+  in your files" stays true without qualification. Every secret that does get substituted is
+  tracked, so it can be masked as `[redacted]` in logs and console output.
+- **Anything switched off never reaches the wire.** A header, query parameter, form field, or
+  variable with `enabled: false` is dropped during resolution, which is why the request
+  engine can trust what it is handed and does not filter again.
+- ⚠️ **Hand-authored files should write `enabled: true` explicitly.** The field is a plain
+  boolean, so leaving it out currently reads as `false` and the entry is dropped. Quiver
+  always writes it, so workspaces it created are unaffected; making an absent `enabled`
+  default to true is a format change with its own migration, and it is on the list.
 
 ## Request engine
 
