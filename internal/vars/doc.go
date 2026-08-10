@@ -4,6 +4,22 @@
 // runner: if each front-end decided for itself what {{baseUrl}} means, a request would stop
 // behaving identically in the app and in CI.
 //
+// # Precedence
+//
+// A name is looked up through the scopes that surround a request, nearest first, and the
+// first scope that defines it wins:
+//
+//  1. values set during the run     — a pre-request script, above everything
+//  2. caller overrides              — `--var key=value`
+//  3. the active environment        — `--env staging`
+//  4. folders, innermost outwards   — the request's ancestry
+//  5. the collection
+//  6. the workspace
+//
+// A nearer folder therefore beats a farther one. A variable that is switched off counts as
+// absent rather than as an override with no value, so turning one off lets the next scope
+// out show through — which is what "disabled" means to the person who ticked the box.
+//
 // # Reference syntax
 //
 // A reference is {{name}}, where name is one or more letters, digits, or any of "_.-" —
