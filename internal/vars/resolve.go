@@ -43,7 +43,8 @@ func (e *UnresolvedError) Error() string {
 // What is not: the method, an API key's placement, an OAuth grant type — fields that name a
 // fixed choice rather than carry a value — and the pre-request and test scripts, which reach
 // variables through the scripting API instead. Substituting into a script would be splicing
-// text into code.
+// text into code. Saved examples are dropped rather than resolved: they document the request,
+// they are not part of sending it.
 //
 // A name nothing defines is reported as an *UnresolvedError listing all of them; a variable
 // that refers back to itself as a *CycleError; a secret the source could not produce as that
@@ -55,18 +56,23 @@ func Resolve(ctx context.Context, req model.Request, chain *Chain, source Secret
 	state := &resolution{ctx: ctx, chain: chain, source: source}
 	e := newExpander(state.lookup)
 
-	// Fields are walked in the order someone reads a request, so the unresolved report comes
-	// back in the order they would scan for them.
+	// Fields are walked in the order someone reads a request — URL, headers, query, auth,
+	// body — so the unresolved report comes back in the order they would scan for them.
 	out := req
+
+	// Saved examples are documentation, not something to send, and keeping them would leave
+	// the copy sharing the stored request's slice. Dropping them settles both at once.
+	out.Examples = nil
+
 	if err := expandAll(e, &out.URL); err != nil {
 		return Resolved{}, err
 	}
 
 	var err error
-	if out.Query, err = resolveParams(e, req.Query); err != nil {
+	if out.Headers, err = resolveParams(e, req.Headers); err != nil {
 		return Resolved{}, err
 	}
-	if out.Headers, err = resolveParams(e, req.Headers); err != nil {
+	if out.Query, err = resolveParams(e, req.Query); err != nil {
 		return Resolved{}, err
 	}
 	if out.Auth, err = resolveAuth(e, req.Auth); err != nil {

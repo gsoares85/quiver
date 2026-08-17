@@ -395,6 +395,18 @@ func TestResolveRecordsASecretSetDuringTheRun(t *testing.T) {
 	require.Equal(t, []string{token}, got.Secrets.Values())
 }
 
+func TestResolveDropsSavedExamples(t *testing.T) {
+	// Examples document a request; they are not part of sending one. Dropping them also
+	// stops the resolved copy sharing the stored request's slice.
+	req := fullRequest()
+	req.Examples = []model.Example{{ID: "ex-1", Name: "created", Request: fullRequest()}}
+
+	got, err := Resolve(context.Background(), req, fullChain(), nil)
+	require.NoError(t, err)
+	require.Nil(t, got.Request.Examples)
+	require.Len(t, req.Examples, 1, "and the stored request keeps them")
+}
+
 func TestResolveStopsOnACancelledContext(t *testing.T) {
 	// Resolution is not I/O, but expansion of a large request is work a user who pressed
 	// cancel should not have to wait out.
