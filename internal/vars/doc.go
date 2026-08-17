@@ -27,8 +27,9 @@
 // as written, which is what lets the braces that occur naturally in payloads survive: a
 // Handlebars template, a CSS block, a JSON object printed inside a string.
 //
-// A literal {{ is written \{{. The backslash is special only immediately before {{, and
-// literal everywhere else, so there is no escaping rule to learn beyond that one sequence.
+// A literal {{ is written \\{{ — two backslashes. Only that exact sequence is special: a
+// single backslash is an ordinary character wherever it appears, which is what lets a
+// Windows path sit in front of a reference, as in C:\{{dir}}\file.json, and still resolve.
 //
 // A value may itself contain references, and those resolve too. A variable that refers back
 // to itself, directly or through others, is reported as a *CycleError naming the loop rather

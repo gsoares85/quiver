@@ -11,8 +11,10 @@ const (
 	refOpen  = "{{"
 	refClose = "}}"
 
-	// escapedOpen is how text that must keep a literal {{ writes it.
-	escapedOpen = `\` + refOpen
+	// escapedOpen is how text that must keep a literal {{ writes it. Two backslashes, not
+	// one: a single backslash stays an ordinary character, so a Windows path may sit
+	// directly in front of a reference — C:\{{dir}}\file.json — and still resolve.
+	escapedOpen = `\\` + refOpen
 
 	// maxDepth bounds how far a value may nest further references. Cycles are caught by
 	// name, so this only guards a chain that keeps resolving to something new: far above
@@ -83,7 +85,7 @@ func (e *expander) substitute(text string, active []string, depth int) (string, 
 		rest = rest[next:]
 
 		if strings.HasPrefix(rest, escapedOpen) {
-			b.WriteString(refOpen) // the backslash is consumed; the braces stay
+			b.WriteString(refOpen) // both backslashes are consumed; the braces stay
 			i += len(escapedOpen)
 			continue
 		}

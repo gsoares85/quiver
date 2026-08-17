@@ -108,20 +108,19 @@ func TestExpandNestedBracesFindTheInnerReference(t *testing.T) {
 }
 
 func TestExpandEscapesALiteralOpener(t *testing.T) {
-	values := map[string]string{"name": "ada", "tpl": `\{{name}}`}
+	values := map[string]string{"name": "ada", "tpl": `\\{{name}}`}
 
 	tests := []struct {
 		name string
 		text string
 		want string
 	}{
-		{name: "escaped reference stays literal", text: `\{{name}}`, want: "{{name}}"},
-		{name: "escaped inside a string", text: `hello \{{name}}!`, want: "hello {{name}}!"},
-		{name: "escaped and live side by side", text: `\{{name}} is {{name}}`, want: "{{name}} is ada"},
-		{name: "handlebars payload", text: `{"template":"Hi \{{firstName}}"}`, want: `{"template":"Hi {{firstName}}"}`},
-		{name: "escape at the very end", text: `trailing \{{`, want: "trailing {{"},
+		{name: "escaped reference stays literal", text: `\\{{name}}`, want: "{{name}}"},
+		{name: "escaped inside a string", text: `hello \\{{name}}!`, want: "hello {{name}}!"},
+		{name: "escaped and live side by side", text: `\\{{name}} is {{name}}`, want: "{{name}} is ada"},
+		{name: "handlebars payload", text: `{"template":"Hi \\{{firstName}}"}`, want: `{"template":"Hi {{firstName}}"}`},
+		{name: "escape at the very end", text: `trailing \\{{`, want: "trailing {{"},
 		{name: "backslash kept before other braces", text: `\{single}`, want: `\{single}`},
-		{name: "double backslash keeps one", text: `\\{{name}}`, want: `\{{name}}`},
 		{name: "escape inside a resolved value", text: "{{tpl}}", want: "{{name}}"},
 	}
 
@@ -130,6 +129,33 @@ func TestExpandEscapesALiteralOpener(t *testing.T) {
 			got, e := expandWith(t, values, tt.text)
 			require.Equal(t, tt.want, got)
 			require.Empty(t, e.unresolvedNames(), "an escaped reference is not an unresolved one")
+		})
+	}
+}
+
+func TestExpandResolvesAfterASingleBackslash(t *testing.T) {
+	// A lone backslash is an ordinary character, so a Windows separator in front of a
+	// reference must not swallow it and leave the braces on the wire unreported. Upload
+	// paths are substituted, which is exactly where those separators live.
+	values := map[string]string{"dir": "data", "sub": "raw", "name": "ada"}
+
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{name: "windows path", text: `C:\{{dir}}\file.json`, want: `C:\data\file.json`},
+		{name: "two references separated by backslashes", text: `{{dir}}\{{sub}}\file.json`, want: `data\raw\file.json`},
+		{name: "doubled is still the escape", text: `\\{{dir}}`, want: `{{dir}}`},
+		{name: "backslash then reference", text: `\{{name}}`, want: `\ada`},
+		{name: "three backslashes", text: `\\\{{name}}`, want: `\{{name}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, e := expandWith(t, values, tt.text)
+			require.Equal(t, tt.want, got)
+			require.Empty(t, e.unresolvedNames())
 		})
 	}
 }
