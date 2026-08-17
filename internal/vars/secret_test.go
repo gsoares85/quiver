@@ -150,6 +150,35 @@ func TestResolutionStopsOnACancelledContext(t *testing.T) {
 	require.Zero(t, source.callCount, "a cancelled run stops asking, whatever the source would have done")
 }
 
+func TestResolutionRecordsASecretSetDuringTheRun(t *testing.T) {
+	// A token a pre-request script exchanges credentials for has no keychain entry to be
+	// fetched from — it arrives through the overlay — but it still has to be masked.
+	const token = "sk-live-abc123"
+	chain := NewChain()
+	chain.SetSecret("apiToken", token)
+	r := newResolution(t, context.Background(), chain, nil)
+
+	value, found, err := r.lookup("apiToken")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, token, value, "the overlay holds the value: nothing is fetched")
+	require.Equal(t, []string{token}, r.secrets.Values())
+}
+
+func TestResolutionDoesNotRecordAnOrdinarySetValue(t *testing.T) {
+	// Set is the common case and stays cheap: only SetSecret asks for masking, or every
+	// variable a script wrote would be redacted out of its own console output.
+	chain := NewChain()
+	chain.Set("page", "2")
+	r := newResolution(t, context.Background(), chain, nil)
+
+	value, found, err := r.lookup("page")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "2", value)
+	require.Empty(t, r.secrets.Values())
+}
+
 func TestResolutionHandsTheContextToTheSource(t *testing.T) {
 	// A keychain read or a prompt is I/O, so the source has to receive the run's context or
 	// it could never be interrupted.

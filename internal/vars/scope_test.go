@@ -104,6 +104,25 @@ func TestChainSetBeatsEverything(t *testing.T) {
 	require.Equal(t, "value", got.Value)
 }
 
+func TestChainSetSecretMarksTheValueForMasking(t *testing.T) {
+	// A secret obtained during the run is the one variable that is both marked secret and
+	// already holds its value — there is no file it could have been read from.
+	chain := NewChain(Scope{v("apiToken", "from-the-file")})
+	chain.SetSecret("apiToken", "sk-live-abc123")
+
+	got, ok := chain.Lookup("apiToken")
+	require.True(t, ok)
+	require.Equal(t, "sk-live-abc123", got.Value)
+	require.True(t, got.Secret)
+
+	// Set after SetSecret clears the flag: the last write is the whole statement about the
+	// variable, not an amendment to the previous one.
+	chain.Set("apiToken", "plain")
+	got, _ = chain.Lookup("apiToken")
+	require.Equal(t, "plain", got.Value)
+	require.False(t, got.Secret)
+}
+
 func TestChainTreatsDisabledVariablesAsAbsent(t *testing.T) {
 	// Switching a variable off means the user wanted it gone — not overridden with nothing.
 	// A disabled entry in a nearer scope must therefore let the farther one through.

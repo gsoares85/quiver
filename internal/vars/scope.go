@@ -47,8 +47,16 @@ func ScopeOf(values map[string]string) Scope {
 // A chain belongs to one run and is not safe for concurrent use — Set exists precisely so a
 // pre-request script can change what the rest of that run sees.
 type Chain struct {
-	overlay map[string]string // set during the run; above every stored scope
+	overlay map[string]runtimeVar // set during the run; above every stored scope
 	scopes  []Scope
+}
+
+// runtimeVar is a variable set during the run. Unlike a secret declared in a file, which
+// stores only a reference, this one already holds its value — secret merely says the value
+// has to be masked wherever it ends up.
+type runtimeVar struct {
+	value  string
+	secret bool
 }
 
 // NewChain builds a chain from scopes given nearest-first. ChainFor is the usual way in;
@@ -88,11 +96,27 @@ func ChainFor(ws *model.Workspace, requestID string, env *model.Environment, ove
 
 // Set records a variable for the rest of the run, above every stored scope. Pre-request
 // scripts write here; nothing about it is persisted.
-func (c *Chain) Set(name, value string) {
+func (c *Chain) Set(name, value string) { c.set(name, runtimeVar{value: value}) }
+
+// SetSecret records a variable for the rest of the run and marks its value for masking, so
+// every place it is substituted can be redacted afterwards. A token a pre-request script
+// exchanges credentials for belongs here: Set alone would put it in the next console dump
+// verbatim.
+func (c *Chain) SetSecret(name, value string) { c.set(name, runtimeVar{value: value, secret: true}) }
+
+func (c *Chain) set(name string, v runtimeVar) {
 	if c.overlay == nil {
-		c.overlay = make(map[string]string, 1)
+		c.overlay = make(map[string]runtimeVar, 1)
 	}
-	c.overlay[name] = value
+	c.overlay[name] = v
+}
+
+// runtime reports a variable set during the run. It is separate from Lookup because the two
+// kinds of secret answer differently: this one carries its value already, while one declared
+// in a file carries only a name the SecretSource has to answer for.
+func (c *Chain) runtime(name string) (runtimeVar, bool) {
+	v, ok := c.overlay[name]
+	return v, ok
 }
 
 // Lookup returns the variable the chain resolves name to. A variable switched off
@@ -100,10 +124,12 @@ func (c *Chain) Set(name, value string) {
 // scope, because "disabled" means the user wanted it gone, not overridden with nothing.
 //
 // It returns the whole variable rather than its value so a caller can see that a name is
-// defined as a secret, whose value lives outside the file and has to be fetched.
+// defined as a secret, whose value lives outside the file and has to be fetched. A secret
+// set during the run is the one case where Secret and Value are both populated: its value
+// never came from a file, so there is nothing to fetch.
 func (c *Chain) Lookup(name string) (model.Variable, bool) {
-	if value, ok := c.overlay[name]; ok {
-		return model.Variable{Key: name, Value: value, Enabled: true}, true
+	if v, ok := c.overlay[name]; ok {
+		return model.Variable{Key: name, Value: v.value, Secret: v.secret, Enabled: true}, true
 	}
 	for _, scope := range c.scopes {
 		for i := range scope {

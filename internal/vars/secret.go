@@ -83,6 +83,15 @@ type resolution struct {
 // lookup is what the expander calls for every reference. A plain variable answers from the
 // file; a secret has no value in the file by design, so its value is fetched and recorded.
 func (r *resolution) lookup(name string) (string, bool, error) {
+	// A variable set during the run already holds its value, secret or not. Recording it
+	// here is what lets a token a script obtained be masked like any other secret.
+	if v, ok := r.chain.runtime(name); ok {
+		if v.secret {
+			r.secrets.add(v.value)
+		}
+		return v.value, true, nil
+	}
+
 	variable, ok := r.chain.Lookup(name)
 	if !ok {
 		return "", false, nil

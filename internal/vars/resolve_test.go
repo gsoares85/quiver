@@ -377,6 +377,24 @@ func TestResolveSubstitutesAndRecordsSecrets(t *testing.T) {
 		"the result carries what it needs to keep the credential out of a log")
 }
 
+func TestResolveRecordsASecretSetDuringTheRun(t *testing.T) {
+	// The overlay is where a pre-request script will put the token it just exchanged
+	// credentials for. It has to be masked like any other secret, even though no source was
+	// ever involved.
+	const token = "sk-live-abc123"
+	chain := NewChain()
+	chain.SetSecret("apiToken", token)
+
+	got, err := Resolve(context.Background(), model.Request{
+		Method: "GET", URL: "https://api.example.com/v1/me",
+		Headers: []model.Header{{Key: "Authorization", Value: "Bearer {{apiToken}}", Enabled: true}},
+	}, chain, nil)
+	require.NoError(t, err)
+
+	require.Equal(t, "Bearer "+token, got.Request.Headers[0].Value)
+	require.Equal(t, []string{token}, got.Secrets.Values())
+}
+
 func TestResolveSurfacesASecretSourceFailure(t *testing.T) {
 	locked := errors.New("keychain is locked")
 	source := &fakeSource{err: locked}
