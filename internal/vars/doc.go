@@ -32,7 +32,9 @@
 //
 // A value may itself contain references, and those resolve too. A variable that refers back
 // to itself, directly or through others, is reported as a *CycleError naming the loop rather
-// than recursed until the stack gives out.
+// than recursed until the stack gives out. Nesting is capped, and so is the total number of
+// substitutions one resolution may perform: a chain where each value names the next twice
+// repeats no name and nests shallowly, yet doubles at every level.
 //
 // A name that no scope defines is left in the text as written and recorded, so a caller can
 // report every unresolved reference at once instead of making the user fix them one run at

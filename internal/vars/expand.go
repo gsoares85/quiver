@@ -18,6 +18,12 @@ const (
 	// name, so this only guards a chain that keeps resolving to something new: far above
 	// any real workspace, far below a stack overflow.
 	maxDepth = 32
+
+	// maxExpansions bounds how many references one resolution may substitute. Depth alone
+	// does not bound the work: a value that names the next variable twice doubles at every
+	// level, so a chain that never repeats a name and stays well inside maxDepth still
+	// expands to gigabytes. Far above any real request, far below anything that hurts.
+	maxExpansions = 10_000
 )
 
 // lookupFunc supplies the value of a variable name. found is false when no scope defines
@@ -42,6 +48,7 @@ type expander struct {
 	look       lookupFunc
 	unresolved []string
 	seen       map[string]bool
+	expansions int // substitutions performed so far, against maxExpansions
 }
 
 func newExpander(look lookupFunc) *expander {
@@ -98,6 +105,17 @@ func (e *expander) substitute(text string, active []string, depth int) (string, 
 			b.WriteString(refOpen + name + refClose) // left visible, not blanked
 			continue
 		}
+
+		// Charge the budget here, where a reference actually turns into text. Depth and the
+		// cycle detector bound the shape of the expansion; only a count bounds its size.
+		e.expansions++
+		if e.expansions > maxExpansions {
+			return "", fmt.Errorf(
+				"variable expansion exceeded %d substitutions, which usually means a value refers to itself indirectly",
+				maxExpansions,
+			)
+		}
+
 		if !strings.Contains(value, refOpen) {
 			b.WriteString(value) // nothing nested, nothing to recurse into
 			continue

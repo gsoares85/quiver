@@ -134,6 +134,45 @@ func TestExpandEscapesALiteralOpener(t *testing.T) {
 	}
 }
 
+func TestExpandBoundsTotalWorkNotJustDepth(t *testing.T) {
+	// Every value names the next one twice: no name repeats, so it is not a cycle, and the
+	// chain is far shallower than maxDepth — yet it doubles at every level. Without a budget
+	// this allocates gigabytes before it stops. It must fail fast instead.
+	const levels = 20 // 2^20 substitutions if nothing stops it, at a depth maxDepth allows
+	doubling := func(name string) (string, bool, error) {
+		var step int
+		if _, err := fmt.Sscanf(name, "v%d", &step); err != nil {
+			return "", false, nil
+		}
+		if step == levels {
+			return "leaf", true, nil
+		}
+		return fmt.Sprintf("{{v%d}}{{v%d}}", step+1, step+1), true, nil
+	}
+
+	e := newExpander(doubling)
+	_, err := e.expand("{{v0}}")
+	require.ErrorContains(t, err, fmt.Sprintf("exceeded %d substitutions", maxExpansions))
+	require.Less(t, e.expansions, maxExpansions*2, "the budget must stop the walk, not merely report it afterwards")
+
+	var cycle *CycleError
+	require.NotErrorAs(t, err, &cycle, "a doubling chain repeats no name")
+}
+
+func TestExpandSpendsTheBudgetAcrossTheWholeRequest(t *testing.T) {
+	// One expander spans every field of a request, so the budget is per resolution rather
+	// than per string: a thousand fields each just under the limit is the same attack.
+	e := newExpander(mapLookup(map[string]string{"a": "x"}))
+
+	text := strings.Repeat("{{a}}", maxExpansions)
+	got, err := e.expand(text)
+	require.NoError(t, err)
+	require.Equal(t, strings.Repeat("x", maxExpansions), got)
+
+	_, err = e.expand("{{a}}")
+	require.ErrorContains(t, err, fmt.Sprintf("exceeded %d substitutions", maxExpansions))
+}
+
 func TestExpandResolvesNestedReferences(t *testing.T) {
 	values := map[string]string{
 		"url":     "{{scheme}}://{{host}}/{{version}}",
