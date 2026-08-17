@@ -137,10 +137,11 @@ to the request engine — so `{{baseUrl}}` cannot come to mean two different thi
 on where you ran it from.
 
 References may appear in the URL, in header and query **names as well as values**, in form
-fields, in the body — including a GraphQL operation's variables — in upload paths, and in
-every credential field. They are not substituted into pre-request or test scripts: those
-read variables through the scripting API instead, because splicing text into code is a
-different and worse idea.
+fields, in the body — including a GraphQL operation's variables — in upload paths, and in the
+credential fields. They are not substituted into fields that name a fixed choice rather than
+carry a value — an API key's placement, an OAuth grant type — nor into pre-request or test
+scripts: those read variables through the scripting API instead, because splicing text into
+code is a different and worse idea.
 
 ### Where a value comes from
 
@@ -167,11 +168,17 @@ scripting host.
 - A reference is `{{name}}`, where the name is letters, digits, `_`, `.`, or `-`, with no
   spaces inside the braces. Anything else that merely looks like one is left alone, so the
   braces in a CSS block, a JSON object, or a `${SHELL}` expression pass through untouched.
-- A **literal** `{{` is written `\{{`. That is what lets you POST a Handlebars or Jinja
-  template as a payload. The backslash is only special immediately before `{{`.
+- A **literal** `{{` is written `\\{{` — two backslashes. That is what lets you POST a
+  Handlebars or Jinja template as a payload: `{"greeting":"Hi \\{{firstName}}"}` goes out
+  with the braces intact.
+- **A single backslash is an ordinary character**, everywhere, including right before a
+  reference. A Windows path therefore resolves as written: `C:\{{dir}}\file.json` becomes
+  `C:\data\file.json`, and only the doubled form suppresses the reference. Upload paths are
+  substituted, so this is the case that matters.
 - A value may contain references of its own — `{{url}}` → `{{host}}/v1` → `https://…` — and
   they resolve too. A variable that refers back to itself is reported as a cycle, naming the
-  loop, rather than hanging.
+  loop, rather than hanging. Nesting depth and the total number of substitutions are both
+  capped, so a workspace someone shared with you cannot expand its way through your memory.
 
 ### When something is missing
 
@@ -189,7 +196,9 @@ unresolved variables: {{baseUrl}}, {{apiToken}}
   no value, and its value is only ever taken from the run-time source — so a value that
   somehow ended up in a committed file is ignored rather than used, and "secrets never live
   in your files" stays true without qualification. Every secret that does get substituted is
-  tracked, so it can be masked as `[redacted]` in logs and console output.
+  tracked, so it can be masked as `[redacted]` in logs and console output. A value set during
+  the run can be marked secret as well, so a token a pre-request script exchanges credentials
+  for is redacted like any other rather than landing in the next console dump.
 - **Anything switched off never reaches the wire.** A header, query parameter, form field, or
   variable with `enabled: false` is dropped during resolution, which is why the request
   engine can trust what it is handed and does not filter again.
