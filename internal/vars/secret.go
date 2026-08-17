@@ -83,6 +83,13 @@ type resolution struct {
 // lookup is what the expander calls for every reference. A plain variable answers from the
 // file; a secret has no value in the file by design, so its value is fetched and recorded.
 func (r *resolution) lookup(name string) (string, bool, error) {
+	// Every reference passes through here, which makes this the one place a cancelled run
+	// can be noticed cheaply — before a source that would happily sit on a prompt is asked,
+	// and often enough that a long expansion stops rather than running to its budget.
+	if err := r.ctx.Err(); err != nil {
+		return "", false, err
+	}
+
 	// A variable set during the run already holds its value, secret or not. Recording it
 	// here is what lets a token a script obtained be masked like any other secret.
 	if v, ok := r.chain.runtime(name); ok {
@@ -100,11 +107,6 @@ func (r *resolution) lookup(name string) (string, bool, error) {
 		return variable.Value, true, nil
 	}
 
-	// Check the context before asking: a cancelled run must stop requesting secrets even
-	// from a source that would happily sit on a prompt.
-	if err := r.ctx.Err(); err != nil {
-		return "", false, err
-	}
 	if r.source == nil {
 		return "", false, fmt.Errorf("variable %q is a secret and no secret source was provided", variable.Key)
 	}

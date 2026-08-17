@@ -150,6 +150,20 @@ func TestResolutionStopsOnACancelledContext(t *testing.T) {
 	require.Zero(t, source.callCount, "a cancelled run stops asking, whatever the source would have done")
 }
 
+func TestResolutionStopsOnACancelledContextForAnyVariable(t *testing.T) {
+	// Cancellation is checked on every reference, not only the ones that reach a source: a
+	// long expansion is the case a user is most likely to want to abandon, and none of it
+	// touches a keychain.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	r := newResolution(t, ctx, NewChain(Scope{v("baseUrl", "https://api.example.com")}), nil)
+
+	_, found, err := r.lookup("baseUrl")
+	require.False(t, found)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestResolutionRecordsASecretSetDuringTheRun(t *testing.T) {
 	// A token a pre-request script exchanges credentials for has no keychain entry to be
 	// fetched from — it arrives through the overlay — but it still has to be masked.

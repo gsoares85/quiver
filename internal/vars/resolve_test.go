@@ -395,6 +395,16 @@ func TestResolveRecordsASecretSetDuringTheRun(t *testing.T) {
 	require.Equal(t, []string{token}, got.Secrets.Values())
 }
 
+func TestResolveStopsOnACancelledContext(t *testing.T) {
+	// Resolution is not I/O, but expansion of a large request is work a user who pressed
+	// cancel should not have to wait out.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := Resolve(ctx, fullRequest(), fullChain(), nil)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestResolveSurfacesASecretSourceFailure(t *testing.T) {
 	locked := errors.New("keychain is locked")
 	source := &fakeSource{err: locked}
