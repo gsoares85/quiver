@@ -382,3 +382,18 @@ func TestParseRef(t *testing.T) {
 		})
 	}
 }
+
+// BenchmarkExpandBodyWithNoReferences measures the common case: a large payload that has
+// nothing to substitute. Every field of every request goes through here, so a copy taken
+// for nothing is a copy taken on every send.
+func BenchmarkExpandBodyWithNoReferences(b *testing.B) {
+	body := strings.Repeat(`{"id":"01J8ZQ","name":"ada","email":"ada@example.com"},`, 20_000)
+	e := newExpander(mapLookup(map[string]string{}))
+
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := e.expand(body); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

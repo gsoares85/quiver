@@ -69,6 +69,13 @@ func (e *expander) unresolvedNames() []string { return e.unresolved }
 // substitute walks text once. active is the stack of names currently being expanded, which
 // serves as both the cycle detector and the path reported when a cycle is found.
 func (e *expander) substitute(text string, active []string, depth int) (string, error) {
+	// Most strings hold nothing to substitute, and an escape contains {{ too, so this one
+	// scan rules out both. Bodies run to megabytes: copying one through a Builder to produce
+	// the same megabyte back is work nobody asked for.
+	if !strings.Contains(text, refOpen) {
+		return text, nil
+	}
+
 	var b strings.Builder
 	for i := 0; i < len(text); {
 		rest := text[i:]
