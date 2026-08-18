@@ -106,6 +106,17 @@ type resolution struct {
 	// answer "did these fields consume a secret?" on its own: it holds each value once, so
 	// a credential already used by an earlier field leaves it unchanged.
 	secretUses int
+
+	// fetched remembers what the source said about each key, so one run asks it once per
+	// secret however many times the request refers to one. Built lazily: a resolution is
+	// also assembled as a plain struct, and a run that touches no secret allocates nothing.
+	fetched map[string]secretAnswer
+}
+
+// secretAnswer is one reply from the source, kept for the rest of the run.
+type secretAnswer struct {
+	value string
+	found bool
 }
 
 // useSecret records a substituted secret value and counts the use.
@@ -145,17 +156,35 @@ func (r *resolution) lookup(name string) (string, bool, error) {
 		return "", false, fmt.Errorf("variable %q is a secret and no secret source was provided", variable.Key)
 	}
 
-	// Deliberately the source's value and not the variable's own: a secret's value is not
-	// supposed to be in the file, and honouring one that is there would make "secrets never
-	// live in the files" a promise that quietly depends on the file.
-	value, found, err := r.source.Secret(r.ctx, variable.Key)
-	if err != nil {
-		return "", false, fmt.Errorf("read secret: %w", err)
+	// A source is asked once per key per run. The same {{token}} in three headers is one
+	// credential, so a second answer would be a different value for one reference — and a
+	// source is free to be expensive: a keychain that asks for a fingerprint would otherwise
+	// ask once per reference rather than once per secret.
+	answer, cached := r.fetched[variable.Key]
+	if !cached {
+		// Deliberately the source's value and not the variable's own: a secret's value is not
+		// supposed to be in the file, and honouring one that is there would make "secrets never
+		// live in the files" a promise that quietly depends on the file.
+		value, found, err := r.source.Secret(r.ctx, variable.Key)
+		if err != nil {
+			// Left uncached deliberately: the resolution fails here, so nothing asks again,
+			// and remembering a locked keychain would outlive the reason it was locked.
+			return "", false, fmt.Errorf("read secret: %w", err)
+		}
+		answer = secretAnswer{value: value, found: found}
+		if r.fetched == nil {
+			r.fetched = make(map[string]secretAnswer)
+		}
+		r.fetched[variable.Key] = answer
 	}
-	if !found {
+
+	if !answer.found {
 		return "", false, nil // unresolved: the user has to supply it
 	}
 
-	r.useSecret(value)
-	return value, true, nil
+	// Recorded per reference and not per fetch: a value the set already holds still has to
+	// count as a secret going into this field, which is what tells a credential built from
+	// one apart from a credential built from ordinary variables.
+	r.useSecret(answer.value)
+	return answer.value, true, nil
 }

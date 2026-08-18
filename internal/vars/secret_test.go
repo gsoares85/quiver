@@ -322,3 +322,54 @@ func TestSecretsAddBasicIgnoresAnEmptyPair(t *testing.T) {
 	require.Empty(t, secrets.Values())
 	require.Equal(t, "Og==", secrets.Redact("Og=="))
 }
+
+func TestResolutionAsksTheSourceOncePerSecret(t *testing.T) {
+	// A source may prompt — a keychain wanting a fingerprint, a one-time question. Asking it
+	// again for a key it already answered would put that in front of the user once per
+	// reference rather than once per secret.
+	source := &fakeSource{values: map[string]string{"apiToken": "sk-live-abc123", "dbPassword": "hunter2"}}
+	r := newResolution(t, context.Background(), NewChain(
+		Scope{secretVar("apiToken"), secretVar("dbPassword")},
+	), source)
+
+	got, err := newExpander(r.lookup).expand("{{apiToken}} {{dbPassword}} {{apiToken}} {{apiToken}}")
+	require.NoError(t, err)
+	require.Equal(t, "sk-live-abc123 hunter2 sk-live-abc123 sk-live-abc123", got,
+		"every reference still resolves to the credential")
+
+	require.Equal(t, []string{"apiToken", "dbPassword"}, source.asked, "each key asked once, in first-use order")
+	require.Equal(t, []string{"sk-live-abc123", "hunter2"}, r.secrets.Values())
+	require.Equal(t, 4, r.secretUses, "a cached answer still counts as a secret used here")
+}
+
+func TestResolutionCachesAnUnknownSecret(t *testing.T) {
+	// "no value for this key" is an answer like any other: asking again inside one run would
+	// re-prompt for a secret the user has already declined to supply.
+	source := &fakeSource{values: map[string]string{}}
+	r := newResolution(t, context.Background(), NewChain(Scope{secretVar("apiToken")}), source)
+
+	e := newExpander(r.lookup)
+	got, err := e.expand("{{apiToken}} and {{apiToken}}")
+	require.NoError(t, err)
+
+	require.Equal(t, "{{apiToken}} and {{apiToken}}", got, "an unresolved secret stays visible, never blanked")
+	require.Equal(t, []string{"apiToken"}, e.unresolvedNames())
+	require.Equal(t, 1, source.callCount, "and the source was asked once")
+	require.Empty(t, r.secrets.Values(), "nothing was substituted, so there is nothing to mask")
+}
+
+func TestResolutionDoesNotCacheASourceFailure(t *testing.T) {
+	// A failure is not an answer to remember: the resolution stops here, and a locked
+	// keychain is a state that outlives neither the run nor the reason it was locked.
+	locked := errors.New("keychain is locked")
+	source := &fakeSource{err: locked}
+	r := newResolution(t, context.Background(), NewChain(Scope{secretVar("apiToken")}), source)
+
+	_, _, err := r.lookup("apiToken")
+	require.ErrorIs(t, err, locked)
+	require.Empty(t, r.fetched, "the failure left nothing behind to be served as an answer")
+
+	_, _, err = r.lookup("apiToken")
+	require.ErrorIs(t, err, locked, "and the source is still consulted, not answered from a cache")
+	require.Equal(t, 2, source.callCount)
+}
