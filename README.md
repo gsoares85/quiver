@@ -1,3 +1,4 @@
+<!--suppress HtmlDeprecatedAttribute -->
 <div align="center">
 
 # Quiver
@@ -45,25 +46,27 @@ pipeline that enforces linting, tests, a coverage gate, and cross-platform build
 The shared **domain model** (`internal/model`) defines the core entities — workspaces,
 collections, folders, requests, environments, auth, and bodies — with ULID identities
 and validation; the **git-native storage engine** (`internal/store`) round-trips those
-entities to and from byte-stable `.qv.yaml` files on disk; and the **request engine**
+entities to and from byte-stable `.qv.yaml` files on disk; the **request engine**
 (`internal/httpengine`) sends them, streaming responses back with a per-phase timing
-waterfall, authentication, redirect control, and full cancellation. Next up:
-`{{variable}}` resolution across environments, and the app and CLI surfaces that put the
-engine in front of you.
+waterfall, authentication, redirect control, and full cancellation; and **variable
+resolution** (`internal/vars`) turns a stored request into a resolved one, substituting
+`{{variable}}` references across environments and the surrounding scopes. Next up: reading
+secret values from the OS keychain, and the app and CLI surfaces that put all of this in
+front of you.
 
 ## Architecture at a glance
 
-| Layer | Technology |
-|-------|-----------|
-| Core engine | **Go** (`internal/*`) — shared by the app and the CLI |
+| Layer             | Technology                                                           |
+|-------------------|----------------------------------------------------------------------|
+| Core engine       | **Go** (`internal/*`) — shared by the app and the CLI                |
 | Request execution | Go **`net/http`** — HTTP/1.1 + HTTP/2, streaming, `httptrace` timing |
-| Desktop shell | **Wails v2** (native webview + Go) |
-| Frontend | **React 18 + TypeScript + Vite** |
-| CLI | **cobra** (`cmd/quiver`) |
-| Storage | Plain-text **`.qv.yaml`** files, git-native |
-| Scripting | **goja** (sandboxed JS) |
-| Collaboration | **Yjs** (CRDT) + self-hostable Go relay |
-| Plugins | **wazero** (sandboxed WASM) |
+| Desktop shell     | **Wails v2** (native webview + Go)                                   |
+| Frontend          | **React 18 + TypeScript + Vite**                                     |
+| CLI               | **cobra** (`cmd/quiver`)                                             |
+| Storage           | Plain-text **`.qv.yaml`** files, git-native                          |
+| Scripting         | **goja** (sandboxed JS)                                              |
+| Collaboration     | **Yjs** (CRDT) + self-hostable Go relay                              |
+| Plugins           | **wazero** (sandboxed WASM)                                          |
 
 ## Repository layout
 
@@ -116,7 +119,8 @@ my-api/                       # workspace root (usually a git repo)
   stay clean; a folder records the authored order of its children in an `order:` list
   (absent order sorts alphabetically).
 - **Secrets stay out of the files.** A secret variable is stored as a reference
-  (`secret: true`, no value); resolving it from the OS keychain is an upcoming feature.
+  (`secret: true`, no value) and its value is fetched at run time; the OS keychain that will
+  supply it is the next piece of work.
 - **Versioned & migratable.** Every file carries a `schemaVersion`; registered
   migrations run on load as the format evolves, so older workspaces keep working.
 - **Safe writes.** Each file is written to a temporary file, fsynced, and renamed over
@@ -124,6 +128,92 @@ my-api/                       # workspace root (usually a git repo)
   per workspace: a save is not a single transaction, so an interrupted one can leave
   some files updated and others not. Machine-local state lives in a git-ignored
   `.quiver/` directory.
+
+## Environments & variables
+
+Write `{{baseUrl}}` in a request and the same collection runs against your laptop, staging,
+and production without anyone editing it. That substitution happens in exactly one place
+(`internal/vars`), which the app and the CLI both resolve through before handing the result
+to the request engine — so `{{baseUrl}}` cannot come to mean two different things depending
+on where you ran it from.
+
+References may appear in the URL, in header and query **names as well as values**, in form
+fields, in the body — including a GraphQL operation's variables — in upload paths, and in the
+credential fields. They are not substituted into fields that name a fixed choice rather than
+carry a value — an API key's placement, an OAuth grant type — nor into pre-request or test
+scripts: those read variables through the scripting API instead, because splicing text into
+code is a different and worse idea.
+
+### Where a value comes from
+
+A name is looked up through the scopes around a request, nearest first, and the first one
+that defines it wins:
+
+| Scope                       | Set by                                |
+|-----------------------------|---------------------------------------|
+| set during the run          | a pre-request script                  |
+| overrides                   | `--var key=value` on the command line |
+| environment                 | `--env staging`                       |
+| folders, innermost outwards | the folders the request sits in       |
+| collection                  | the collection it belongs to          |
+| workspace                   | `quiver.yaml`                         |
+
+So a folder can narrow what its collection defines, and an environment overrides both.
+
+The resolver already accepts the values behind the top two rows; the `--var` and `--env`
+flags that will pass them arrive with the CLI runner, and pre-request scripts with the
+scripting host.
+
+### The syntax
+
+- A reference is `{{name}}`, where the name is letters, digits, `_`, `.`, or `-`, with no
+  spaces inside the braces. Anything else that merely looks like one is left alone, so the
+  braces in a CSS block, a JSON object, or a `${SHELL}` expression pass through untouched.
+- A **literal** `{{` is written `\\{{` — two backslashes. That is what lets you POST a
+  Handlebars or Jinja template as a payload: `{"greeting":"Hi \\{{firstName}}"}` goes out
+  with the braces intact.
+- **A single backslash is an ordinary character**, everywhere, including right before a
+  reference. A Windows path therefore resolves as written: `C:\{{dir}}\file.json` becomes
+  `C:\data\file.json`, and only the doubled form suppresses the reference. Upload paths are
+  substituted, so this is the case that matters.
+- A value may contain references of its own — `{{url}}` → `{{host}}/v1` → `https://…` — and
+  they resolve too. A variable that refers back to itself is reported as a cycle, naming the
+  loop, rather than hanging. Nesting depth and the total number of substitutions are both
+  capped, so a workspace someone shared with you cannot expand its way through your memory.
+
+### When something is missing
+
+An unknown variable is never quietly replaced with an empty string; sending
+`Authorization: Bearer ` and puzzling over a 401 is nobody's idea of a good afternoon. The
+request is refused and **every** unresolved name is listed at once, so a fix takes one pass:
+
+```text
+unresolved variables: {{baseUrl}}, {{apiToken}}
+```
+
+### Secrets and disabled entries
+
+- **A secret is fetched, never read from the file.** A variable marked `secret: true` stores
+  no value, and its value is only ever taken from the run-time source — so a value that
+  somehow ended up in a committed file is ignored rather than used, and "secrets never live
+  in your files" stays true without qualification. The source is asked once per secret per
+  run, however many places name it: a keychain that wants a fingerprint asks once, not once
+  per reference. Every secret that does get substituted is tracked, so it can be masked as
+  `[redacted]` in logs and console output. A value set during the run can be marked secret as
+  well, so a token a pre-request script exchanges credentials for is redacted like any other
+  rather than landing in the next console dump.
+- **Masking follows a credential into the form it is sent in.** Basic auth does not travel as
+  the password you stored: it goes as base64 of `user:password`, which contains neither half
+  literally, so masking the value alone would leave the credential sitting in plain sight.
+  The encoding is tracked alongside the value it came from, so the credential in an
+  `Authorization: Basic …` dump reads as `[redacted]` rather than as something decodable.
+- **Anything switched off never reaches the wire.** A header, query parameter, form field, or
+  variable with `enabled: false` is dropped during resolution, which is why the request
+  engine can trust what it is handed and does not filter again.
+- ⚠️ **Hand-authored files should write `enabled: true` explicitly.** The field is a plain
+  boolean, so leaving it out currently reads as `false` and the entry is dropped. Quiver
+  always writes it, so workspaces it created are unaffected; making an absent `enabled`
+  default to true is a format change with its own migration, and it is on the list.
 
 ## Request engine
 
@@ -247,6 +337,7 @@ such as Apache-2.0 or MIT is the intended direction).
 
 ---
 
+<!--suppress HtmlDeprecatedAttribute -->
 <div align="center">
 Built and maintained by <strong>Guilherme Soares</strong>.
 </div>
