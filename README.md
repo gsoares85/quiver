@@ -196,10 +196,17 @@ unresolved variables: {{baseUrl}}, {{apiToken}}
 - **A secret is fetched, never read from the file.** A variable marked `secret: true` stores
   no value, and its value is only ever taken from the run-time source — so a value that
   somehow ended up in a committed file is ignored rather than used, and "secrets never live
-  in your files" stays true without qualification. Every secret that does get substituted is
-  tracked, so it can be masked as `[redacted]` in logs and console output. A value set during
-  the run can be marked secret as well, so a token a pre-request script exchanges credentials
-  for is redacted like any other rather than landing in the next console dump.
+  in your files" stays true without qualification. The source is asked once per secret per
+  run, however many places name it: a keychain that wants a fingerprint asks once, not once
+  per reference. Every secret that does get substituted is tracked, so it can be masked as
+  `[redacted]` in logs and console output. A value set during the run can be marked secret as
+  well, so a token a pre-request script exchanges credentials for is redacted like any other
+  rather than landing in the next console dump.
+- **Masking follows a credential into the form it is sent in.** Basic auth does not travel as
+  the password you stored: it goes as base64 of `user:password`, which contains neither half
+  literally, so masking the value alone would leave the credential sitting in plain sight.
+  The encoding is tracked alongside the value it came from, so the credential in an
+  `Authorization: Basic …` dump reads as `[redacted]` rather than as something decodable.
 - **Anything switched off never reaches the wire.** A header, query parameter, form field, or
   variable with `enabled: false` is dropped during resolution, which is why the request
   engine can trust what it is handed and does not filter again.
