@@ -1,3 +1,4 @@
+<!--suppress HtmlDeprecatedAttribute -->
 <div align="center">
 
 # Quiver
@@ -55,17 +56,17 @@ front of you.
 
 ## Architecture at a glance
 
-| Layer | Technology |
-|-------|-----------|
-| Core engine | **Go** (`internal/*`) — shared by the app and the CLI |
+| Layer             | Technology                                                           |
+|-------------------|----------------------------------------------------------------------|
+| Core engine       | **Go** (`internal/*`) — shared by the app and the CLI                |
 | Request execution | Go **`net/http`** — HTTP/1.1 + HTTP/2, streaming, `httptrace` timing |
-| Desktop shell | **Wails v2** (native webview + Go) |
-| Frontend | **React 18 + TypeScript + Vite** |
-| CLI | **cobra** (`cmd/quiver`) |
-| Storage | Plain-text **`.qv.yaml`** files, git-native |
-| Scripting | **goja** (sandboxed JS) |
-| Collaboration | **Yjs** (CRDT) + self-hostable Go relay |
-| Plugins | **wazero** (sandboxed WASM) |
+| Desktop shell     | **Wails v2** (native webview + Go)                                   |
+| Frontend          | **React 18 + TypeScript + Vite**                                     |
+| CLI               | **cobra** (`cmd/quiver`)                                             |
+| Storage           | Plain-text **`.qv.yaml`** files, git-native                          |
+| Scripting         | **goja** (sandboxed JS)                                              |
+| Collaboration     | **Yjs** (CRDT) + self-hostable Go relay                              |
+| Plugins           | **wazero** (sandboxed WASM)                                          |
 
 ## Repository layout
 
@@ -148,14 +149,14 @@ code is a different and worse idea.
 A name is looked up through the scopes around a request, nearest first, and the first one
 that defines it wins:
 
-| Scope | Set by |
-|-------|--------|
-| set during the run | a pre-request script |
-| overrides | `--var key=value` on the command line |
-| environment | `--env staging` |
-| folders, innermost outwards | the folders the request sits in |
-| collection | the collection it belongs to |
-| workspace | `quiver.yaml` |
+| Scope                       | Set by                                |
+|-----------------------------|---------------------------------------|
+| set during the run          | a pre-request script                  |
+| overrides                   | `--var key=value` on the command line |
+| environment                 | `--env staging`                       |
+| folders, innermost outwards | the folders the request sits in       |
+| collection                  | the collection it belongs to          |
+| workspace                   | `quiver.yaml`                         |
 
 So a folder can narrow what its collection defines, and an environment overrides both.
 
@@ -329,6 +330,7 @@ such as Apache-2.0 or MIT is the intended direction).
 
 ---
 
+<!--suppress HtmlDeprecatedAttribute -->
 <div align="center">
 Built and maintained by <strong>Guilherme Soares</strong>.
 </div>
