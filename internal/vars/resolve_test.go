@@ -2,6 +2,7 @@ package vars
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"testing"
 
@@ -462,4 +463,58 @@ func TestResolveThroughAWorkspaceChain(t *testing.T) {
 	}, chain, nil)
 	require.NoError(t, err)
 	require.Equal(t, "https://api.example.com/users?scope=environment", got.Request.URL)
+}
+
+func TestResolveRecordsTheEncodedBasicCredential(t *testing.T) {
+	// A basic credential reaches the wire as base64("user:password"), which contains neither
+	// half literally. Recording only the substituted password would leave a header dump
+	// carrying a credential that decodes straight back to it.
+	source := &fakeSource{values: map[string]string{"dbPassword": "l0velace"}}
+
+	got, err := Resolve(context.Background(), model.Request{
+		Method: "GET", URL: "https://api.example.com/v1/me",
+		Auth: &model.Auth{Type: model.AuthBasic, Basic: &model.BasicAuth{
+			Username: "ada", Password: "{{dbPassword}}",
+		}},
+	}, NewChain(Scope{secretVar("dbPassword")}), source)
+	require.NoError(t, err)
+
+	require.Equal(t, "l0velace", got.Request.Auth.Basic.Password, "the request still carries the real credential")
+	require.Equal(t, []string{"l0velace", "YWRhOmwwdmVsYWNl"}, got.Secrets.Values())
+	require.Equal(t, "Authorization: Basic "+Mask,
+		got.Secrets.Redact("Authorization: Basic YWRhOmwwdmVsYWNl"))
+}
+
+func TestResolveRecordsTheEncodedBasicCredentialForASecretReusedEarlier(t *testing.T) {
+	// The same secret in a header first: Secrets records a value once, so the recorded set is
+	// unchanged by the time the credential is expanded. Whether a secret was used has to be
+	// counted, not inferred from the set growing.
+	source := &fakeSource{values: map[string]string{"token": "sk-live-abc123"}}
+
+	got, err := Resolve(context.Background(), model.Request{
+		Method: "GET", URL: "https://api.example.com/v1/me",
+		Headers: []model.Header{{Key: "X-Token", Value: "{{token}}", Enabled: true}},
+		Auth: &model.Auth{Type: model.AuthBasic, Basic: &model.BasicAuth{
+			Username: "{{token}}", Password: "",
+		}},
+	}, NewChain(Scope{secretVar("token")}), source)
+	require.NoError(t, err)
+
+	encoded := base64.StdEncoding.EncodeToString([]byte("sk-live-abc123:"))
+	require.Equal(t, []string{"sk-live-abc123", encoded}, got.Secrets.Values())
+	require.Equal(t, "Authorization: Basic "+Mask, got.Secrets.Redact("Authorization: Basic "+encoded))
+}
+
+func TestResolveLeavesOrdinaryBasicCredentialsUnrecorded(t *testing.T) {
+	// Credentials built from plain variables are not secrets, and encoding them would mask
+	// text nobody asked to hide.
+	got, err := Resolve(context.Background(), model.Request{
+		Method: "GET", URL: "https://api.example.com/v1/me",
+		Auth: &model.Auth{Type: model.AuthBasic, Basic: &model.BasicAuth{
+			Username: "{{user}}", Password: "{{pass}}",
+		}},
+	}, NewChain(Scope{v("user", "ada"), v("pass", "public")}), nil)
+	require.NoError(t, err)
+
+	require.Empty(t, got.Secrets.Values())
 }

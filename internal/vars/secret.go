@@ -2,6 +2,7 @@ package vars
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"slices"
 	"strings"
@@ -26,15 +27,17 @@ type SecretSource interface {
 	Secret(ctx context.Context, key string) (value string, found bool, err error)
 }
 
-// Secrets is the set of secret values a resolution substituted into a request. Once
-// substituted, a secret is indistinguishable from any other string, so this is the only
-// record of which ones need masking before anything derived from the request — a log line, a
-// console dump, a saved response — leaves the process.
+// Secrets is the set of secret values a resolution substituted into a request, together with
+// the encoded forms those values take on the wire. Once substituted, a secret is
+// indistinguishable from any other string, so this is the only record of what needs masking
+// before anything derived from the request — a log line, a console dump, a saved response —
+// leaves the process.
 type Secrets struct {
 	values []string
 }
 
-// Values lists the secret values that were substituted, in the order they were first used.
+// Values lists what needs masking, in the order it was first recorded: the values that were
+// substituted, and any encoding of them that reaches the wire in place of the value itself.
 // The slice is a copy, but it holds the real secrets: handle it as carefully as the
 // credentials themselves.
 func (s Secrets) Values() []string {
@@ -69,6 +72,26 @@ func (s *Secrets) add(value string) {
 	s.values = append(s.values, value)
 }
 
+// addBasic records the credential an "Authorization: Basic" header will carry for a pair
+// where either half was a secret. The header value is base64 of "user:password", which
+// contains neither half literally, so masking the substituted values alone would leave a
+// credential that decodes straight back to both in any header or wire dump.
+//
+// The encoding deliberately mirrors http.Request.SetBasicAuth, which is what the request
+// engine uses. Nothing in the compiler holds the two together — this package stays a leaf
+// that never imports the engine — so a change there has to be followed here.
+//
+// Only the encoded payload is recorded and not the "Basic " prefix, so it masks the same
+// whether a dump shows the whole header line or the blob on its own.
+func (s *Secrets) addBasic(username, password string) {
+	// Both halves empty means nothing of substance was substituted, and the encoding of a
+	// bare ":" is not a credential: recording it would mask four characters of any text.
+	if username == "" && password == "" {
+		return
+	}
+	s.add(base64.StdEncoding.EncodeToString([]byte(username + ":" + password)))
+}
+
 // resolution is the state of a single resolve: the chain names are looked up in, where
 // secret values come from, and the secrets substituted so far. It holds a context because
 // the expander it feeds looks variables up by name alone, and fetching a secret is I/O that
@@ -78,6 +101,17 @@ type resolution struct {
 	chain   *Chain
 	source  SecretSource
 	secrets Secrets
+
+	// secretUses counts secret substitutions, repeats included. The recorded set cannot
+	// answer "did these fields consume a secret?" on its own: it holds each value once, so
+	// a credential already used by an earlier field leaves it unchanged.
+	secretUses int
+}
+
+// useSecret records a substituted secret value and counts the use.
+func (r *resolution) useSecret(value string) {
+	r.secrets.add(value)
+	r.secretUses++
 }
 
 // lookup is what the expander calls for every reference. A plain variable answers from the
@@ -94,7 +128,7 @@ func (r *resolution) lookup(name string) (string, bool, error) {
 	// here is what lets a token a script obtained be masked like any other secret.
 	if v, ok := r.chain.runtime(name); ok {
 		if v.secret {
-			r.secrets.add(v.value)
+			r.useSecret(v.value)
 		}
 		return v.value, true, nil
 	}
@@ -122,6 +156,6 @@ func (r *resolution) lookup(name string) (string, bool, error) {
 		return "", false, nil // unresolved: the user has to supply it
 	}
 
-	r.secrets.add(value)
+	r.useSecret(value)
 	return value, true, nil
 }

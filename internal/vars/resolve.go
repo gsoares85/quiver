@@ -75,7 +75,7 @@ func Resolve(ctx context.Context, req model.Request, chain *Chain, source Secret
 	if out.Query, err = resolveParams(e, req.Query); err != nil {
 		return Resolved{}, err
 	}
-	if out.Auth, err = resolveAuth(e, req.Auth); err != nil {
+	if out.Auth, err = state.resolveAuth(e, req.Auth); err != nil {
 		return Resolved{}, err
 	}
 	if out.Body, err = resolveBody(e, req.Body); err != nil {
@@ -128,7 +128,10 @@ func resolveParams(e *expander, in []model.Header) ([]model.Header, error) {
 
 // resolveAuth substitutes into whichever credentials the request carries. Each variant is
 // copied before being written to, so the stored auth is left as it was.
-func resolveAuth(e *expander, in *model.Auth) (*model.Auth, error) {
+//
+// It is a method rather than a free function because basic credentials need one thing the
+// expander cannot report: whether a secret went into them. See the Basic branch.
+func (r *resolution) resolveAuth(e *expander, in *model.Auth) (*model.Auth, error) {
 	if in == nil {
 		return nil, nil
 	}
@@ -136,8 +139,19 @@ func resolveAuth(e *expander, in *model.Auth) (*model.Auth, error) {
 
 	if in.Basic != nil {
 		basic := *in.Basic
+		uses := r.secretUses
 		if err := expandAll(e, &basic.Username, &basic.Password); err != nil {
 			return nil, err
+		}
+		// A basic credential does not reach the wire as either half: the engine sends
+		// base64("user:password"), which contains neither literally. Recording the encoding
+		// alongside the values is what keeps the credential masked in a header dump instead
+		// of travelling through Redact untouched and decoding back to both halves.
+		//
+		// Only when a secret was actually substituted here: encoding a pair of ordinary
+		// variables would mask text that was never a secret.
+		if r.secretUses > uses {
+			r.secrets.addBasic(basic.Username, basic.Password)
 		}
 		out.Basic = &basic
 	}

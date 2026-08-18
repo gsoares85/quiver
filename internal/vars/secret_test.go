@@ -300,3 +300,25 @@ func TestSecretsValuesIsACopy(t *testing.T) {
 
 	require.Equal(t, []string{"token"}, secrets.Values(), "the caller cannot reach into the set")
 }
+
+func TestSecretsAddBasic(t *testing.T) {
+	// The encoding has to match what the engine puts on the wire — net/http sends
+	// base64("user:password") — or the recorded value would mask nothing.
+	var secrets Secrets
+	secrets.add("l0velace")
+	secrets.addBasic("ada", "l0velace")
+
+	const header = "Authorization: Basic YWRhOmwwdmVsYWNl"
+	require.Equal(t, "Authorization: Basic "+Mask, secrets.Redact(header),
+		"the encoded credential is masked, not just the password it decodes to")
+	require.Equal(t, []string{"l0velace", "YWRhOmwwdmVsYWNl"}, secrets.Values())
+}
+
+func TestSecretsAddBasicIgnoresAnEmptyPair(t *testing.T) {
+	// base64(":") is "Og==" — four characters of ordinary text, not a credential.
+	var secrets Secrets
+	secrets.addBasic("", "")
+
+	require.Empty(t, secrets.Values())
+	require.Equal(t, "Og==", secrets.Redact("Og=="))
+}
